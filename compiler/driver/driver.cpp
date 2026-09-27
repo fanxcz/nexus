@@ -11,12 +11,13 @@
 #include <sstream>
 #include <string>
 #include <vector>
+#include <chrono>
 
 namespace nexus {
 namespace fs = std::filesystem;
 
 namespace {
-constexpr const char* kVersion = "0.9.0";
+constexpr const char* kVersion = "1.0.0";
 fs::path gExecutable;
 
 std::string readFile(const fs::path& p) {
@@ -128,17 +129,27 @@ void usage() {
         << "Nexus " << kVersion << "\n"
         << "Usage: nexus <command> [options]\n\n"
         << "Project commands:\n"
-        << "  new <project> [--template cli|app|game|3d]\n"
-        << "  init [--template cli|app|game|3d]\n"
+        << "  new <project> [--template cli|app|game|3d|server|library]\n"
+        << "  init [--template cli|app|game|3d|server|library]\n"
         << "  info\n"
         << "  assets\n"
         << "  clean\n"
-        << "  doctor\n\n"
+        << "  doctor\n"
+        << "  editor [--gui]\n\n"
         << "Build commands:\n"
         << "  build [file.nx] [-o output] [--target TRIPLE] [--emit-ir] [--release]\n"
         << "  run [file.nx] [--target TRIPLE] [--release]\n"
         << "  check [file.nx]\n"
-        << "  targets\n  version\n  help\n\n"
+        << "  targets\n"
+        << "  fmt [file.nx]\n"
+        << "  lint [file.nx]\n"
+        << "  doc\n"
+        << "  bench [file.nx] [--runs N]\n"
+        << "  test\n"
+        << "  pkg <init|add|remove|list|update|build|publish> [args]\n"
+        << "  lsp\n"
+        << "  version\n"
+        << "  help\n\n"
         << "Examples:\n"
         << "  nexus new NeonGame --template game\n"
         << "  cd NeonGame && nexus build && nexus run\n"
@@ -174,10 +185,39 @@ Program loadProgram(const fs::path& root, std::set<fs::path>& seen) {
     auto prog = Parser(Lexer(src).tokenize()).parseProgram();
     Program all;
     for (const auto& imp : prog.imports) {
-        if (imp.rfind("std.", 0) == 0) continue;
-        fs::path child = imp;
-        if (child.extension().empty()) child += ".nx";
-        if (child.is_relative()) child = canon.parent_path() / child;
+        fs::path child;
+        if (imp.rfind("std.", 0) == 0) {
+            const std::string mod = imp.substr(4);
+            std::vector<fs::path> candidates;
+            candidates.push_back(canon.parent_path() / "std" / (mod + ".nx"));
+#ifdef NEXUS_SOURCE_ROOT
+            candidates.push_back(fs::path(NEXUS_SOURCE_ROOT) / "std" / (mod + ".nx"));
+#endif
+            if (!gExecutable.empty()) {
+                const auto bin = fs::weakly_canonical(gExecutable).parent_path();
+                candidates.push_back(bin / "../share/nexus/std" / (mod + ".nx"));
+                candidates.push_back(bin / "../../std" / (mod + ".nx"));
+            }
+            for (const auto& c : candidates) if (fs::exists(c)) { child = c; break; }
+            if (child.empty()) throw std::runtime_error("standard module not found: " + imp);
+        } else {
+            child = imp;
+            if (child.extension().empty()) child += ".nx";
+            if (child.is_relative()) {
+                const auto local = canon.parent_path() / child;
+                const auto vendorName = child.stem();
+                std::vector<fs::path> candidates;
+                candidates.push_back(local);
+                const auto pkgRoot = findProjectRoot(canon);
+                if (!pkgRoot.empty()) {
+                    candidates.push_back(pkgRoot / "vendor" / vendorName / "src/main.nx");
+                    candidates.push_back(pkgRoot / "vendor" / child);
+                }
+                candidates.push_back(canon.parent_path() / "vendor" / vendorName / "src/main.nx");
+                candidates.push_back(canon.parent_path() / "vendor" / child);
+                for (const auto& c : candidates) if (fs::exists(c)) { child = c; break; }
+            }
+        }
         appendProgram(all, loadProgram(child, seen));
     }
     appendProgram(all, std::move(prog));
@@ -418,6 +458,219 @@ int commandDoctor() {
     return 0;
 }
 
+
+void writeText(const fs::path& p, const std::string& data) {
+    fs::create_directories(p.parent_path().empty() ? fs::current_path() : p.parent_path());
+    std::ofstream f(p, std::ios::binary);
+    if (!f) throw std::runtime_error("cannot write " + p.string());
+    f << data;
+}
+
+int commandFmt(const fs::path& file) {
+    const std::string src = readFile(file);
+    std::istringstream in(src);
+    std::ostringstream out;
+    std::string line;
+    int indent = 0;
+    bool touched = false;
+    while (std::getline(in, line)) {
+        while (!line.empty() && (line.back()==' ' || line.back()=='\t' || line.back()=='\r')) { line.pop_back(); touched=true; }
+        std::string t = trim(line);
+        if (t.empty()) { out << '\n'; continue; }
+        if (!t.empty() && t.front()=='}') indent = std::max(0, indent-1);
+        for (int i=0;i<indent;++i) out << "    ";
+        out << t << '\n';
+        if (!t.empty() && t.back()=='{' && !(t.rfind("//",0)==0)) ++indent;
+        if (t.find("} else {") != std::string::npos) indent = std::max(0, indent);
+    }
+    const std::string formatted = out.str();
+    if (formatted != src) { writeText(file, formatted); touched=true; }
+    std::cout << "fmt: " << (touched ? "updated" : "already formatted") << " -> " << file << '\n';
+    return 0;
+}
+
+int commandLint(const fs::path& file) {
+    const std::string src = readFile(file);
+    std::size_t warnings = 0, lineNo = 0;
+    std::istringstream in(src);
+    std::string line;
+    while (std::getline(in,line)) {
+        ++lineNo;
+        if (!line.empty() && (line.back()==' ' || line.back()=='\t' || line.back()=='\r')) {
+            ++warnings; std::cout << "warning[NX9001]: trailing whitespace at " << file << ':' << lineNo << '\n';
+        }
+        if (line.find("TODO") != std::string::npos || line.find("FIXME") != std::string::npos) {
+            ++warnings; std::cout << "warning[NX9002]: unfinished marker at " << file << ':' << lineNo << '\n';
+        }
+    }
+    std::set<fs::path> seen;
+    auto prog = loadProgram(file, seen);
+    SemanticAnalyzer().analyze(prog);
+    std::cout << "lint: OK" << (warnings ? ", " + std::to_string(warnings) + " warning(s)" : "") << '\n';
+    return 0;
+}
+
+int commandDoc() {
+    const auto cfg = loadProject();
+    const auto entry = cfg.root / cfg.entry;
+    const std::string src = readFile(entry);
+    std::istringstream in(src);
+    std::ostringstream docs;
+    docs << "# " << cfg.name << " API\n\nGenerated by NEXUS 1.0.0.\n\n";
+    std::string pending;
+    std::string line;
+    while (std::getline(in,line)) {
+        const auto t = trim(line);
+        if (t.rfind("///",0)==0) { pending += trim(t.substr(3)) + "\n"; continue; }
+        if (t.rfind("fn ",0)==0 || t.rfind("struct ",0)==0 || t.rfind("enum ",0)==0) {
+            docs << "## " << t << "\n\n";
+            if (!pending.empty()) { docs << pending << "\n"; pending.clear(); }
+        }
+    }
+    const fs::path out = cfg.root / "docs/API.md";
+    writeText(out, docs.str());
+    std::cout << "doc: generated " << out << '\n';
+    return 0;
+}
+
+int commandBench(const fs::path& file, int runs) {
+    const auto out = fs::temp_directory_path() / (file.stem().string() + ".nexus-bench");
+    compileFile(file, out, "native", false, 3);
+    std::vector<long long> samples;
+    samples.reserve(std::max(1,runs));
+    for (int i=0;i<std::max(1,runs);++i) {
+        const auto a = std::chrono::steady_clock::now();
+        const std::string cmd = shellQuote(out.string());
+        const int rc = std::system(cmd.c_str());
+        const auto b = std::chrono::steady_clock::now();
+        if (rc != 0) throw std::runtime_error("benchmark program exited with code " + std::to_string(rc));
+        samples.push_back(std::chrono::duration_cast<std::chrono::microseconds>(b-a).count());
+    }
+    std::error_code ec; fs::remove(out,ec);
+    long long total=0; for(auto x:samples) total+=x;
+    std::cout << "bench: " << samples.size() << " run(s), average " << (total / samples.size()) << " us\n";
+    return 0;
+}
+
+
+int commandTest() {
+    const auto cfg = loadProject();
+    const auto root = cfg.root / "tests/programs";
+    if (!fs::exists(root)) { std::cout << "test: no tests/programs directory\n"; return 0; }
+    std::size_t count=0;
+    for (const auto& e : fs::recursive_directory_iterator(root)) {
+        if (!e.is_regular_file() || e.path().extension() != ".nx") continue;
+        ++count;
+        const auto out = fs::temp_directory_path() / (e.path().stem().string()+".nexus-test");
+        compileFile(e.path(),out,"native",false,2);
+        const int rc=std::system(shellQuote(out.string()).c_str());
+        std::error_code ec; fs::remove(out,ec);
+        if(rc!=0) throw std::runtime_error("test failed: "+e.path().string());
+        std::cout << "  PASS " << fs::relative(e.path(),cfg.root).string() << "\n";
+    }
+    std::cout << "test: " << count << " program(s) passed\n";
+    return 0;
+}
+
+int commandEditor() {
+    const auto cfg = loadProject();
+    const auto vscode = cfg.root / ".vscode";
+    fs::create_directories(vscode);
+    writeText(vscode / "settings.json", R"JSON({
+  "files.associations": { "*.nx": "rust" },
+  "editor.tabSize": 4,
+  "editor.insertSpaces": true
+}
+)JSON");
+    writeText(vscode / "tasks.json", R"JSON({
+  "version": "2.0.0",
+  "tasks": [{
+    "label": "NEXUS Build",
+    "type": "shell",
+    "command": "nexus build --release",
+    "group": "build"
+  }]
+}
+)JSON");
+    std::cout << "editor: generated VS Code integration in .vscode/\n";
+    std::cout << "editor: use `nexus lsp` as the language-server command\n";
+    return 0;
+}
+
+void appendDependency(const fs::path& manifest, const std::string& name, const std::string& value) {
+    std::string data = readFile(manifest);
+    if (data.find("[dependencies]") == std::string::npos) data += "\n[dependencies]\n";
+    if (data.find(name + " =") == std::string::npos) data += name + " = \"" + value + "\"\n";
+    writeText(manifest, data);
+}
+
+int commandPkg(const std::vector<std::string>& args) {
+    const auto cfg = loadProject();
+    if (args.empty() || args[0]=="help") {
+        std::cout << "nexus pkg init|add <path>|remove <name>|list|update|build|publish\n";
+        return 0;
+    }
+    const std::string sub=args[0];
+    const auto vendor=cfg.root/"vendor";
+    if(sub=="init") {
+        writeText(cfg.root/"nexus.lock", "# NEXUS lockfile v1\npackage = \""+cfg.name+"\"\nversion = \""+cfg.version+"\"\n");
+        fs::create_directories(vendor); std::cout << "pkg init: OK\n"; return 0;
+    }
+    if(sub=="list") {
+        std::cout << "Packages for "<<cfg.name<<":\n";
+        if(fs::exists(vendor)) for(auto&e:fs::directory_iterator(vendor)) if(e.is_directory()) std::cout<<"  "<<e.path().filename().string()<<"\n";
+        return 0;
+    }
+    if(sub=="add") {
+        if(args.size()<2) throw std::runtime_error("pkg add requires a local package directory");
+        fs::path src=args[1]; if(src.is_relative()) src=fs::absolute(src);
+        if(!fs::exists(src/"nexus.toml")) throw std::runtime_error("package directory must contain nexus.toml");
+        const auto pkg=loadProject(src); const auto dst=vendor/pkg.name; fs::remove_all(dst); fs::create_directories(dst);
+        std::error_code ec; fs::copy(src,dst,fs::copy_options::recursive|fs::copy_options::overwrite_existing,ec); if(ec) throw std::runtime_error("cannot vendor package: "+ec.message());
+        appendDependency(cfg.root/"nexus.toml", pkg.name, "vendor/"+pkg.name);
+        writeText(cfg.root/"nexus.lock", "# NEXUS lockfile v1\n"+pkg.name+" = \""+pkg.version+"\"\n");
+        std::cout << "pkg add: vendored "<<pkg.name<<" "<<pkg.version<<"\n"; return 0;
+    }
+    if(sub=="remove") {
+        if(args.size()<2) throw std::runtime_error("pkg remove requires a package name");
+        const auto dst=vendor/args[1]; std::error_code ec; fs::remove_all(dst,ec); std::cout<<"pkg remove: "<<args[1]<<"\n"; return 0;
+    }
+    if(sub=="update") { writeText(cfg.root/"nexus.lock", "# NEXUS lockfile v1\npackage = \""+cfg.name+"\"\nversion = \""+cfg.version+"\"\n"); std::cout<<"pkg update: lockfile refreshed\n"; return 0; }
+    if(sub=="build") { const auto in=cfg.root/cfg.entry; const auto out=defaultOutput(in,"",true); compileFile(in,out,cfg.target,false,3); std::cout<<"pkg build: OK -> "<<out<<"\n"; return 0; }
+    if(sub=="publish") {
+        const auto dist=cfg.root/"dist"; fs::create_directories(dist); const auto archive=dist/(cfg.name+"-"+cfg.version+".nxpkg");
+        std::string cmd="cmake -E tar cf "+shellQuote(archive.string())+" --format=zip";
+        for (const auto& rel : {std::string("nexus.toml"),std::string("src"),std::string("assets"),std::string("scenes"),std::string("vendor"),std::string("docs")}) { if(fs::exists(cfg.root/rel)) cmd += " "+shellQuote(rel); }
+        const int rc=std::system(("cd "+shellQuote(cfg.root.string())+" && "+cmd).c_str()); if(rc!=0) throw std::runtime_error("cannot create package archive");
+        std::cout<<"pkg publish: created "<<archive<<"\n"; return 0;
+    }
+    throw std::runtime_error("unknown pkg command: "+sub);
+}
+
+int commandLsp() {
+    std::string line, body;
+    while(std::getline(std::cin,line)) {
+        if(line.rfind("Content-Length:",0)==0) {
+            const auto n=static_cast<std::size_t>(std::stoul(trim(line.substr(15))));
+            std::getline(std::cin,line); body.assign(n,'\0'); std::cin.read(body.data(),std::streamsize(n));
+            std::string id="1";
+            const auto idpos=body.find("\"id\"");
+            if(idpos!=std::string::npos){
+                const auto colon=body.find(':',idpos);
+                if(colon!=std::string::npos){std::size_t j=colon+1;while(j<body.size()&&std::isspace(static_cast<unsigned char>(body[j])))++j;std::size_t e=j;while(e<body.size()&&std::isdigit(static_cast<unsigned char>(body[e])))++e;if(e>j)id=body.substr(j,e-j);}
+            }
+            if(body.find("\"method\":\"initialize\"")!=std::string::npos) {
+                const std::string result="{\"jsonrpc\":\"2.0\",\"id\":"+id+",\"result\":{\"capabilities\":{\"textDocumentSync\":1,\"documentFormattingProvider\":true,\"definitionProvider\":false,\"completionProvider\":{\"triggerCharacters\":[\".\"]}}}}";
+                std::cout<<"Content-Length: "<<result.size()<<"\r\n\r\n"<<result<<std::flush;
+            } else if(body.find("\"method\":\"shutdown\"")!=std::string::npos) {
+                const std::string result="{\"jsonrpc\":\"2.0\",\"id\":"+id+",\"result\":null}";
+                std::cout<<"Content-Length: "<<result.size()<<"\r\n\r\n"<<result<<std::flush;
+            }
+        }
+    }
+    return 0;
+}
+
 } // namespace
 
 int run(int argc, char** argv) {
@@ -446,7 +699,7 @@ int run(int argc, char** argv) {
                 else if (a.rfind("--template=", 0) == 0) templ = a.substr(11);
                 else throw std::runtime_error("unknown option: " + a);
             }
-            if (templ != "cli" && templ != "app" && templ != "game" && templ != "3d") throw std::runtime_error("unknown template: " + templ);
+            if (templ != "cli" && templ != "app" && templ != "game" && templ != "3d" && templ != "server" && templ != "library") throw std::runtime_error("unknown template: " + templ);
             const fs::path projectPath = fs::absolute(argv[2]);
             return initProject(projectPath, projectPath.filename().string(), templ, true);
         }
@@ -459,7 +712,7 @@ int run(int argc, char** argv) {
                 else if (a.rfind("--template=", 0) == 0) templ = a.substr(11);
                 else throw std::runtime_error("unknown option: " + a);
             }
-            if (templ != "cli" && templ != "app" && templ != "game" && templ != "3d") throw std::runtime_error("unknown template: " + templ);
+            if (templ != "cli" && templ != "app" && templ != "game" && templ != "3d" && templ != "server" && templ != "library") throw std::runtime_error("unknown template: " + templ);
             const fs::path root = fs::current_path();
             return initProject(root, root.filename().string(), templ, false);
         }
@@ -468,6 +721,31 @@ int run(int argc, char** argv) {
         if (cmd == "assets") return commandAssets();
         if (cmd == "clean") return commandClean();
         if (cmd == "doctor") return commandDoctor();
+
+        if (cmd == "fmt" || cmd == "format") {
+            const auto in = resolveInput(argc >= 3 && argv[2][0] != '-' ? argv[2] : "");
+            return commandFmt(in);
+        }
+        if (cmd == "lint") {
+            const auto in = resolveInput(argc >= 3 && argv[2][0] != '-' ? argv[2] : "");
+            return commandLint(in);
+        }
+        if (cmd == "doc") return commandDoc();
+        if (cmd == "bench") {
+            const auto in = resolveInput(argc >= 3 && argv[2][0] != '-' ? argv[2] : "");
+            int runs=5; for(int i=2;i<argc;++i){std::string a=argv[i]; if(a=="--runs"&&i+1<argc)runs=std::stoi(argv[++i]); else if(a.rfind("--runs=",0)==0)runs=std::stoi(a.substr(7));}
+            return commandBench(in,runs);
+        }
+        if (cmd == "test") return commandTest();
+        if (cmd == "editor") {
+            bool gui=false; for(int i=2;i<argc;++i) if(std::string(argv[i])=="--gui") gui=true;
+            if(!gui) return commandEditor();
+            const auto tpl=templateSource("editor"); if(tpl.empty()) throw std::runtime_error("built-in editor template not found");
+            const auto out=fs::temp_directory_path()/"nexus-editor"; compileFile(tpl,out,"native",false,2);
+            return std::system(shellQuote(out.string()).c_str());
+        }
+        if (cmd == "lsp") return commandLsp();
+        if (cmd == "pkg") { std::vector<std::string> args; for(int i=2;i<argc;++i) args.emplace_back(argv[i]); return commandPkg(args); }
 
         if (cmd == "check") {
             const auto in = resolveInput(argc >= 3 && argv[2][0] != '-' ? argv[2] : "");

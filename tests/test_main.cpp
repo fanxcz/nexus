@@ -35,6 +35,15 @@ int main(){
             nexus::SemanticAnalyzer().analyze(p);
         }
         {
+            auto p=parse("fn main(){ const base: i64 = 2; let mut total: i64 = 0; for i in 1..6 { total += i * base } print(total) }");
+            nexus::SemanticAnalyzer().analyze(p);
+        }
+        {
+            bool failed=false;
+            try { auto p=parse("fn main(){ const x: i64 = 1; x = 2 }"); nexus::SemanticAnalyzer().analyze(p); } catch(const std::exception&) { failed=true; }
+            if(!failed) return 3;
+        }
+        {
             bool failed=false;
             try {
                 auto p=parse("fn main(){ let x = 1; x = 2 }");

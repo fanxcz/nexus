@@ -21,7 +21,7 @@ EnumDecl Parser::parseEnum(){expect(TokenKind::KwEnum); EnumDecl e; e.name=expec
 Function Parser::parseFunction(bool external){expect(TokenKind::KwFn);auto name=expectIdentifier();expect(TokenKind::LParen);std::vector<Param>ps;if(cur().kind!=TokenKind::RParen){for(;;){auto n=expectIdentifier();expect(TokenKind::Colon);ps.push_back({n,parseType()});if(!accept(TokenKind::Comma))break;}}expect(TokenKind::RParen);Type ret=Type::void_();if(accept(TokenKind::Arrow))ret=parseType();if(external){accept(TokenKind::Semicolon);return {name,std::move(ps),ret,nullptr,true};}auto body=parseBlock();return {name,std::move(ps),ret,std::move(body),false};}
 std::unique_ptr<Block> Parser::parseBlock(){expect(TokenKind::LBrace);auto b=std::make_unique<Block>();while(cur().kind!=TokenKind::RBrace&&cur().kind!=TokenKind::End)b->statements.push_back(parseStmt());expect(TokenKind::RBrace);return b;}
 Stmt::Ptr Parser::parseStmt(){
-    if(accept(TokenKind::KwLet)){bool mut=accept(TokenKind::KwMut);auto n=expectIdentifier();Type ty; if(accept(TokenKind::Colon))ty=parseType();expect(TokenKind::Equal);auto e=parseExpr();accept(TokenKind::Semicolon);auto s=std::make_unique<LetStmt>();s->name=n;s->mut=mut;s->type=ty;s->init=std::move(e);return s;}
+    bool isConst=accept(TokenKind::KwConst); if(isConst||accept(TokenKind::KwLet)){bool mut=!isConst && accept(TokenKind::KwMut);auto n=expectIdentifier();Type ty; if(accept(TokenKind::Colon))ty=parseType();expect(TokenKind::Equal);auto e=parseExpr();accept(TokenKind::Semicolon);auto s=std::make_unique<LetStmt>();s->name=n;s->mut=mut;s->type=ty;s->init=std::move(e);return s;}
     if(accept(TokenKind::KwReturn)){auto e=cur().kind==TokenKind::RBrace?nullptr:parseExpr();accept(TokenKind::Semicolon);auto s=std::make_unique<ReturnStmt>();s->expr=std::move(e);return s;}
     if(accept(TokenKind::KwIf)){
         auto c=parseExpr();
@@ -53,12 +53,34 @@ Stmt::Ptr Parser::parseStmt(){
         s->elseBlock=std::move(e);
         return s;
     }
+    if(accept(TokenKind::KwFor)){
+        auto name=expectIdentifier();
+        expect(TokenKind::KwIn);
+        auto start=parseExpr();
+        expect(TokenKind::Range);
+        auto end=parseExpr();
+        auto body=parseBlock();
+        auto init=std::make_unique<LetStmt>(); init->name=name; init->mut=true; init->init=std::move(start);
+        auto cond=std::make_unique<BinaryExpr>(TokenKind::Less,std::make_unique<VarExpr>(name),std::move(end));
+        auto inc=std::make_unique<AssignStmt>(); inc->name=name; inc->value=std::make_unique<BinaryExpr>(TokenKind::Plus,std::make_unique<VarExpr>(name),std::make_unique<IntExpr>(1));
+        body->statements.push_back(std::move(inc));
+        auto loop=std::make_unique<WhileStmt>(); loop->cond=std::move(cond); loop->body=std::move(body);
+        auto wrap=std::make_unique<Block>(); wrap->statements.push_back(std::move(init)); wrap->statements.push_back(std::move(loop));
+        return wrap;
+    }
     if(accept(TokenKind::KwWhile)){auto c=parseExpr();auto b=parseBlock();auto s=std::make_unique<WhileStmt>();s->cond=std::move(c);s->body=std::move(b);return s;}
     if(accept(TokenKind::KwMatch)){Expr::Ptr value;if(cur().kind==TokenKind::Identifier&&i_+1<tokens_.size()&&tokens_[i_+1].kind==TokenKind::LBrace)value=std::make_unique<VarExpr>(expectIdentifier());else value=parseExpr();expect(TokenKind::LBrace);auto s=std::make_unique<MatchStmt>();s->value=std::move(value);while(cur().kind!=TokenKind::RBrace&&cur().kind!=TokenKind::End){bool wildcard=false;Expr::Ptr pattern; if(cur().kind==TokenKind::Identifier&&cur().text=="_"){wildcard=true;pattern=std::make_unique<VarExpr>(expectIdentifier());}else pattern=parseExpr();expect(TokenKind::FatArrow);auto body=parseBlock();s->arms.push_back({std::move(pattern),std::move(body),wildcard});accept(TokenKind::Comma); }expect(TokenKind::RBrace);return s;}
     if(accept(TokenKind::KwBreak)){accept(TokenKind::Semicolon);return std::make_unique<BreakStmt>();}
     if(accept(TokenKind::KwContinue)){accept(TokenKind::Semicolon);return std::make_unique<ContinueStmt>();}
     auto lhs=parseExpr();
-    if(accept(TokenKind::Equal)){auto rhs=parseExpr();accept(TokenKind::Semicolon); if(auto*v=dynamic_cast<VarExpr*>(lhs.get())){auto s=std::make_unique<AssignStmt>();s->name=v->name;s->value=std::move(rhs);return s;} if(auto*m=dynamic_cast<MemberExpr*>(lhs.get())){auto s=std::make_unique<MemberAssignStmt>();s->object=std::move(m->object);s->member=m->member;s->value=std::move(rhs);return s;} if(auto*ix=dynamic_cast<IndexExpr*>(lhs.get())){auto s=std::make_unique<IndexAssignStmt>();s->object=std::move(ix->object);s->index=std::move(ix->index);s->value=std::move(rhs);return s;} throw std::runtime_error("left side of assignment is not assignable");}
+    TokenKind assignOp=TokenKind::Equal; bool hasAssign=false;
+    if(accept(TokenKind::Equal)){hasAssign=true; assignOp=TokenKind::Equal;}
+    else if(accept(TokenKind::PlusEqual)){hasAssign=true; assignOp=TokenKind::Plus;}
+    else if(accept(TokenKind::MinusEqual)){hasAssign=true; assignOp=TokenKind::Minus;}
+    else if(accept(TokenKind::StarEqual)){hasAssign=true; assignOp=TokenKind::Star;}
+    else if(accept(TokenKind::SlashEqual)){hasAssign=true; assignOp=TokenKind::Slash;}
+    else if(accept(TokenKind::PercentEqual)){hasAssign=true; assignOp=TokenKind::Percent;}
+    if(hasAssign){auto rhs=parseExpr();accept(TokenKind::Semicolon); if(auto*v=dynamic_cast<VarExpr*>(lhs.get())){auto s=std::make_unique<AssignStmt>();s->name=v->name;s->value=(assignOp==TokenKind::Equal)?std::move(rhs):std::make_unique<BinaryExpr>(assignOp,std::make_unique<VarExpr>(v->name),std::move(rhs));return s;} if(auto*m=dynamic_cast<MemberExpr*>(lhs.get())){auto s=std::make_unique<MemberAssignStmt>();s->object=std::move(m->object);s->member=m->member;s->value=std::move(rhs);return s;} if(auto*ix=dynamic_cast<IndexExpr*>(lhs.get())){auto s=std::make_unique<IndexAssignStmt>();s->object=std::move(ix->object);s->index=std::move(ix->index);s->value=std::move(rhs);return s;} throw std::runtime_error("left side of assignment is not assignable");}
     accept(TokenKind::Semicolon);auto s=std::make_unique<ExprStmt>();s->expr=std::move(lhs);return s;
 }
 int Parser::precedence(TokenKind k)const{switch(k){case TokenKind::OrOr:return 1;case TokenKind::AndAnd:return 2;case TokenKind::EqualEqual:case TokenKind::BangEqual:return 3;case TokenKind::Less:case TokenKind::LessEqual:case TokenKind::Greater:case TokenKind::GreaterEqual:return 4;case TokenKind::Plus:case TokenKind::Minus:return 5;case TokenKind::Star:case TokenKind::Slash:case TokenKind::Percent:return 6;default:return -1;}}

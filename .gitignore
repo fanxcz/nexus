@@ -9,3 +9,6 @@ build/
 .cache/
 .ninja/
 compile_commands.json
+
+# Keep source assets tracked even if generic object files are ignored.
+!examples/assets/*.obj

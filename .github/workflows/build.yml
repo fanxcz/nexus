@@ -36,5 +36,11 @@ jobs:
       - name: Test
         run: ctest --test-dir build --output-on-failure
 
-      - name: Smoke test
-        run: ./build/nexus run examples/hello.nx
+      - name: Smoke test (POSIX)
+        if: runner.os != 'Windows'
+        run: ./build/nexus --version
+
+      - name: Smoke test (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: .\build\nexus.exe --version

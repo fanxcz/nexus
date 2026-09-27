@@ -145,6 +145,14 @@ inline std::optional<BuiltinSignature> builtinSignature(const std::string& name)
     if (name == "ecs_x") return BuiltinSignature{name, {T::i64()}, T::f64(), "nexus_ecs_x"};
     if (name == "ecs_y") return BuiltinSignature{name, {T::i64()}, T::f64(), "nexus_ecs_y"};
     if (name == "ecs_count") return BuiltinSignature{name, {}, T::i64(), "nexus_ecs_count"};
+    if (name == "mem_alloc") return BuiltinSignature{name, {T::i64()}, T::i64(), "nexus_mem_alloc"};
+    if (name == "mem_free") return BuiltinSignature{name, {T::i64()}, T::void_(), "nexus_mem_free"};
+    if (name == "http_get") return BuiltinSignature{name, {T::string()}, T::string(), "nexus_http_get"};
+    if (name == "json_get") return BuiltinSignature{name, {T::string(), T::string()}, T::string(), "nexus_json_get"};
+    if (name == "sqlite_open") return BuiltinSignature{name, {T::string()}, T::i64(), "nexus_sqlite_open"};
+    if (name == "sqlite_exec") return BuiltinSignature{name, {T::i64(), T::string()}, T::i64(), "nexus_sqlite_exec"};
+    if (name == "sqlite_close") return BuiltinSignature{name, {T::i64()}, T::void_(), "nexus_sqlite_close"};
+    if (name == "sha256") return BuiltinSignature{name, {T::string()}, T::string(), "nexus_sha256"};
     return std::nullopt;
 }
 

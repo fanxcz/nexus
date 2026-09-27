@@ -726,6 +726,47 @@ static void shutdown_graphics(){
 
 } // namespace
 
+
+namespace {
+static std::string nx_shell_quote(const char* s) {
+    std::string out="'";
+    if (!s) return out+"'";
+    for (const char c: std::string(s)) { if (c=='\'') out += "'\\''"; else out += c; }
+    out += "'"; return out;
+}
+
+struct SQLiteApi {
+    using Db = void;
+    using Open = int(*)(const char*, Db**);
+    using Exec = int(*)(Db*, const char*, int(*)(void*,int,char**,char**), void*, char**);
+    using Close = int(*)(Db*);
+    void* handle=nullptr; Open open=nullptr; Exec exec=nullptr; Close close=nullptr;
+};
+static SQLiteApi gSqlite;
+static std::unordered_map<int64_t, SQLiteApi::Db*> gDatabases;
+static int64_t gNextDb=1;
+static bool load_sqlite_runtime() {
+    if (gSqlite.open) return true;
+#if defined(_WIN32)
+    HMODULE h=LoadLibraryA("sqlite3.dll");
+    if(!h) return false;
+    gSqlite.handle=h;
+    gSqlite.open=reinterpret_cast<SQLiteApi::Open>(GetProcAddress(h,"sqlite3_open"));
+    gSqlite.exec=reinterpret_cast<SQLiteApi::Exec>(GetProcAddress(h,"sqlite3_exec"));
+    gSqlite.close=reinterpret_cast<SQLiteApi::Close>(GetProcAddress(h,"sqlite3_close"));
+#else
+    void* h=dlopen("libsqlite3.so.0",RTLD_LAZY);
+    if(!h) h=dlopen("libsqlite3.so",RTLD_LAZY);
+    if(!h) return false;
+    gSqlite.handle=h;
+    gSqlite.open=reinterpret_cast<SQLiteApi::Open>(dlsym(h,"sqlite3_open"));
+    gSqlite.exec=reinterpret_cast<SQLiteApi::Exec>(dlsym(h,"sqlite3_exec"));
+    gSqlite.close=reinterpret_cast<SQLiteApi::Close>(dlsym(h,"sqlite3_close"));
+#endif
+    return gSqlite.open && gSqlite.exec && gSqlite.close;
+}
+}
+
 extern "C" {
 
 // Existing runtime API -------------------------------------------------------
@@ -749,6 +790,65 @@ void nexus_clear(){std::fputs("\033[2J\033[H",stdout);std::fflush(stdout);} void
 }
 int64_t nexus_random_i64(int64_t min,int64_t max){static bool s=false;if(!s){std::srand((unsigned)std::time(nullptr));s=true;}if(min>max)std::swap(min,max);uint64_t span=uint64_t(max-min)+1u;if(!span)return min;uint64_t r=(uint64_t(std::rand())<<32)^uint64_t(std::rand());return min+int64_t(r%span);}int64_t nexus_time_ms(){return int64_t(now_seconds()*1000.0);}
 int64_t nexus_system(const char*c){return c?std::system(c):-1;}char*nexus_file_read(const char*p){if(!p)return nullptr;std::FILE*f=std::fopen(p,"rb");if(!f)return nullptr;std::fseek(f,0,SEEK_END);long n=std::ftell(f);std::rewind(f);if(n<0){std::fclose(f);return nullptr;}char*o=(char*)std::malloc(size_t(n)+1);if(!o){std::fclose(f);return nullptr;}size_t got=std::fread(o,1,size_t(n),f);std::fclose(f);o[got]=0;return o;}int64_t nexus_file_write(const char*p,const char*d){if(!p)return-1;std::FILE*f=std::fopen(p,"wb");if(!f)return-1;const char*s=d?d:"";size_t n=std::strlen(s),w=std::fwrite(s,1,n,f);int ok=w==n&&std::fclose(f)==0;return ok?0:-1;}bool nexus_file_exists(const char*p){if(!p)return false;std::FILE*f=std::fopen(p,"rb");if(!f)return false;std::fclose(f);return true;}char*nexus_env(const char*n){const char*v=n?std::getenv(n):nullptr;return nx_strdup(v?v:"");}void nexus_exit(int64_t c){std::exit(int(c));}
+int64_t nexus_mem_alloc(int64_t bytes){if(bytes<=0)return 0;return reinterpret_cast<int64_t>(std::malloc(static_cast<size_t>(bytes)));}
+void nexus_mem_free(int64_t ptr){if(ptr)std::free(reinterpret_cast<void*>(ptr));}
+char* nexus_http_get(const char* url){
+    if(!url||!*url)return nx_strdup("");
+#if defined(_WIN32)
+    FILE* p=_popen(("curl -fsSL --max-time 15 "+nx_shell_quote(url)).c_str(),"r");
+#else
+    FILE* p=popen(("curl -fsSL --max-time 15 "+nx_shell_quote(url)).c_str(),"r");
+#endif
+    if(!p)return nx_strdup("");
+    std::string out; char buf[4096]; while(std::fgets(buf,sizeof(buf),p))out += buf;
+#if defined(_WIN32)
+    _pclose(p);
+#else
+    pclose(p);
+#endif
+    return nx_strdup(out.c_str());
+}
+char* nexus_json_get(const char* json,const char* key){
+    if(!json||!key)return nx_strdup("");
+    const std::string src(json), needle="\""+std::string(key)+"\"";
+    auto pos=src.find(needle); if(pos==std::string::npos)return nx_strdup("");
+    pos=src.find(':',pos+needle.size()); if(pos==std::string::npos)return nx_strdup(""); ++pos;
+    while(pos<src.size()&&std::isspace(static_cast<unsigned char>(src[pos])))++pos;
+    if(pos>=src.size())return nx_strdup("");
+    if(src[pos]=='"'){
+        ++pos; std::string out; bool esc=false;
+        for(;pos<src.size();++pos){char c=src[pos]; if(esc){out+=c;esc=false;continue;} if(c=='\\'){esc=true;continue;} if(c=='"')break; out+=c;}
+        return nx_strdup(out.c_str());
+    }
+    auto end=pos; while(end<src.size()&&src[end]!=','&&src[end]!='}'&&src[end]!='\n'&&src[end]!='\r')++end;
+    auto out=src.substr(pos,end-pos); while(!out.empty()&&std::isspace(static_cast<unsigned char>(out.back())))out.pop_back(); return nx_strdup(out.c_str());
+}
+int64_t nexus_sqlite_open(const char* path){
+    if(!load_sqlite_runtime())return 0; SQLiteApi::Db* db=nullptr; if(gSqlite.open(path?path:":memory:",&db)!=0||!db)return 0; const int64_t id=gNextDb++;gDatabases[id]=db;return id;
+}
+int64_t nexus_sqlite_exec(int64_t id,const char* sql){
+    auto it=gDatabases.find(id); if(it==gDatabases.end()||!gSqlite.exec)return -1; char* err=nullptr; const int rc=gSqlite.exec(it->second,sql?sql:"",nullptr,nullptr,&err); if(err){std::fprintf(stderr,"SQLite: %s\n",err); if(std::strlen(err)) std::free(err);} return rc;
+}
+void nexus_sqlite_close(int64_t id){auto it=gDatabases.find(id);if(it==gDatabases.end())return;if(gSqlite.close)gSqlite.close(it->second);gDatabases.erase(it);}
+char* nexus_sha256(const char* text){
+    if(!text)return nx_strdup("");
+    const auto tmp=std::string("/tmp/nexus_sha256_")+std::to_string(reinterpret_cast<uintptr_t>(text))+".txt";
+    { std::ofstream f(tmp); if(!f)return nx_strdup(""); f<<text; }
+#if defined(_WIN32)
+    FILE* p=_popen(("certutil -hashfile "+nx_shell_quote(tmp.c_str())+" SHA256 2>NUL").c_str(),"r");
+#else
+    FILE* p=popen(("sha256sum "+nx_shell_quote(tmp.c_str())+" 2>/dev/null").c_str(),"r");
+#endif
+    std::string out; if(p){char b[256];if(std::fgets(b,sizeof(b),p))out=b;
+#if defined(_WIN32)
+        _pclose(p);
+#else
+        pclose(p);
+#endif
+    }
+    std::remove(tmp.c_str()); if(!out.empty()){auto sp=out.find_first_of(" \t\r\n"); if(sp!=std::string::npos)out.resize(sp);} return nx_strdup(out.c_str());
+}
+
 
 // Interactive terminal helpers remain available.
 void nexus_screen_begin(){ } void nexus_screen_end(){ } void nexus_screen_clear(){nexus_clear();}void nexus_screen_put(int64_t x,int64_t y,const char*t){std::printf("\033[%lld;%lldH%s",(long long)(y+1),(long long)(x+1),t?t:"");}void nexus_screen_present(){std::fflush(stdout);}void nexus_screen_set_title(const char*t){(void)t;}int64_t nexus_screen_width(){return 80;}int64_t nexus_screen_height(){return 24;}bool nexus_key_pressed(){return false;}int64_t nexus_read_key(){return -1;}void nexus_beep(){std::fputs("\a",stdout);std::fflush(stdout);}
