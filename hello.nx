@@ -1,8 +1,0 @@
-fn main() {
-    let name = "Nexus"
-    let a = 10
-    let b = 32
-
-    print("Hello, " + name)
-    print(a + b)
-}

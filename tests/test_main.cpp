@@ -47,6 +47,10 @@ int main(){
             try { auto p=parse("fn main(){ let a = [1, 2, 3]; print(a[3]) }"); nexus::SemanticAnalyzer().analyze(p); } catch(const std::exception&) { failed=true; }
             if(!failed) return 2;
         }
+        {
+            auto p=parse("fn main(){ let mut running = true; while running { running = false } let name = input(\"Name: \"); let n = input_i64(\"N: \"); let x = str_i64(n); let ok = file_write(\"/tmp/nexus-tests.txt\", x); print(ok) }");
+            nexus::SemanticAnalyzer().analyze(p);
+        }
         std::cout<<"Nexus tests: PASS\n";
         return 0;
     } catch(const std::exception&e){

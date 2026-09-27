@@ -70,7 +70,7 @@ Expr::Ptr Parser::parsePrimary(){
     if(cur().kind==TokenKind::Identifier || cur().kind==TokenKind::KwPrint){
         auto n=expect(cur().kind).text;
         if(cur().kind==TokenKind::ColonColon){++i_;auto v=expectIdentifier();return std::make_unique<EnumVariantExpr>(n,v);}
-        if(cur().kind==TokenKind::LBrace){auto s=std::make_unique<StructInitExpr>(n);expect(TokenKind::LBrace);while(cur().kind!=TokenKind::RBrace){auto f=expectIdentifier();expect(TokenKind::Colon);s->fields.push_back({f,parseExpr()});if(!accept(TokenKind::Comma))break;}expect(TokenKind::RBrace);return s;}
+        if(cur().kind==TokenKind::LBrace && i_+2<tokens_.size() && tokens_[i_+1].kind==TokenKind::Identifier && tokens_[i_+2].kind==TokenKind::Colon){auto s=std::make_unique<StructInitExpr>(n);expect(TokenKind::LBrace);while(cur().kind!=TokenKind::RBrace){auto f=expectIdentifier();expect(TokenKind::Colon);s->fields.push_back({f,parseExpr()});if(!accept(TokenKind::Comma))break;}expect(TokenKind::RBrace);return s;}
         return std::make_unique<VarExpr>(n);
     }
     if(accept(TokenKind::LBracket)){auto a=std::make_unique<ArrayExpr>();if(cur().kind!=TokenKind::RBracket){for(;;){a->elements.push_back(parseExpr());if(!accept(TokenKind::Comma))break;}}expect(TokenKind::RBracket);return a;}

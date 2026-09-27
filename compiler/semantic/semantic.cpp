@@ -1,4 +1,5 @@
 #include "semantic/semantic.hpp"
+#include "builtins.hpp"
 #include <stdexcept>
 #include <unordered_map>
 #include <functional>
@@ -10,7 +11,7 @@ void SemanticAnalyzer::analyze(Program& p){
     funcs_.clear(); structs_.clear(); enums_.clear();
     for(auto& s:p.structs){if(structs_.contains(s.name)||enums_.contains(s.name))throw std::runtime_error("duplicate type: "+s.name);structs_[s.name]=&s;}
     for(auto& e:p.enums){if(structs_.contains(e.name)||enums_.contains(e.name))throw std::runtime_error("duplicate type: "+e.name);enums_[e.name]=&e;}
-    for(auto& f:p.functions){if(funcs_.contains(f.name))throw std::runtime_error("duplicate function: "+f.name);funcs_[f.name]=&f;}
+    for(auto& f:p.functions){if(funcs_.contains(f.name))throw std::runtime_error("duplicate function: "+f.name);if(builtinSignature(f.name).has_value())throw std::runtime_error("function name is reserved by builtin runtime: "+f.name);funcs_[f.name]=&f;}
     std::function<void(const Type&)> validateType;
     validateType=[&](const Type&t){
         if(t.kind==TypeKind::Struct && !structs_.contains(t.name)) throw std::runtime_error("unknown type: "+t.name);
@@ -40,7 +41,7 @@ Type SemanticAnalyzer::expr(Expr* e,std::unordered_map<std::string,Symbol>& env)
             default: break;
         }
     }
-    if(auto*c=dynamic_cast<CallExpr*>(e)){if(c->callee=="print"){if(c->args.size()!=1)throw std::runtime_error("print expects one argument");auto t=expr(c->args[0].get(),env);if(t.kind!=TypeKind::I64&&t.kind!=TypeKind::F64&&t.kind!=TypeKind::Bool&&t.kind!=TypeKind::String)throw std::runtime_error("print: unsupported type");return Type::void_();}auto it=funcs_.find(c->callee);if(it==funcs_.end())throw std::runtime_error("unknown function: "+c->callee);auto*f=it->second;if(f->params.size()!=c->args.size())throw std::runtime_error("wrong argument count for "+c->callee);for(size_t i=0;i<c->args.size();++i)if(!sameType(expr(c->args[i].get(),env),f->params[i].type))throw std::runtime_error("argument type mismatch in "+c->callee);return f->ret;}
+    if(auto*c=dynamic_cast<CallExpr*>(e)){if(c->callee=="print"){if(c->args.size()!=1)throw std::runtime_error("print expects one argument");auto t=expr(c->args[0].get(),env);if(t.kind!=TypeKind::I64&&t.kind!=TypeKind::F64&&t.kind!=TypeKind::Bool&&t.kind!=TypeKind::String)throw std::runtime_error("print: unsupported type");return Type::void_();}if(auto bi=builtinSignature(c->callee)){if(bi->params.size()!=c->args.size())throw std::runtime_error("wrong argument count for builtin "+c->callee);for(size_t i=0;i<c->args.size();++i)if(!sameType(expr(c->args[i].get(),env),bi->params[i]))throw std::runtime_error("argument type mismatch in builtin "+c->callee);return bi->ret;}auto it=funcs_.find(c->callee);if(it==funcs_.end())throw std::runtime_error("unknown function: "+c->callee);auto*f=it->second;if(f->params.size()!=c->args.size())throw std::runtime_error("wrong argument count for "+c->callee);for(size_t i=0;i<c->args.size();++i)if(!sameType(expr(c->args[i].get(),env),f->params[i].type))throw std::runtime_error("argument type mismatch in "+c->callee);return f->ret;}
     if(auto*m=dynamic_cast<MemberExpr*>(e)){auto t=expr(m->object.get(),env);if(t.kind!=TypeKind::Struct)throw std::runtime_error("member access requires struct");auto& s=getStruct(t.name);auto*f=fieldOf(s,m->member);if(!f)throw std::runtime_error("unknown field '"+m->member+"' on "+t.name);return f->type;}
     if(auto*si=dynamic_cast<StructInitExpr*>(e)){auto&s=getStruct(si->typeName);if(si->fields.size()!=s.fields.size())throw std::runtime_error("wrong number of fields for "+si->typeName);for(auto&[name,x]:si->fields){auto*f=fieldOf(s,name);if(!f)throw std::runtime_error("unknown field '"+name+"'");if(!sameType(expr(x.get(),env),f->type))throw std::runtime_error("field type mismatch for "+name);}return Type::named(si->typeName);}
     throw std::runtime_error("unsupported expression");

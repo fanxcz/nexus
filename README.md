@@ -1,48 +1,57 @@
 # NEXUS
 
-Nexus is a universal programming language built around a C++20 compiler and LLVM-compatible native code generation. The compiler is developed on Debian 13, while the language frontend and target model are designed to remain platform-independent.
+NEXUS is a universal programming language with a C++20 compiler, LLVM-compatible native code generation, and a growing cross-platform runtime. The compiler is developed on Debian 13, while the language frontend is designed to stay platform-independent.
 
-## v0.3.1 — Arena + Parser Hotfix
+## v0.4.0 — Interactive Apps & Games Runtime
 
-Working now:
-
-- chained `else if` parsing
-- `examples/nexus_arena.nx`: a full native terminal arena simulation combining structs, enums, match, arrays, pointers, `f64`, functions, loops and LLVM code generation
-
-## v0.2.1 — String Operations Fix
+NEXUS can now be used to build genuinely interactive command-line applications and terminal games instead of programs that only print a fixed sequence of output.
 
 Working now:
 
-- string concatenation with `+`
-- string equality with `==` and `!=`
+- `input`, `input_i64`, `input_f64`
+- `str_i64`, `str_f64`, `str_bool`
+- `sleep`, `time_ms`, `random_i64`
+- `clear`, `system`, `exit`, `beep`
+- `file_read`, `file_write`, `file_exists`, `env`
+- terminal game loop: `screen_begin/end/clear/put/present`
+- non-blocking keyboard input: `key_pressed`, `read_key`
+- terminal size: `screen_width`, `screen_height`
+- terminal title: `screen_set_title`
+- project templates: `nexus new --template cli|app|game`
+- interactive CLI example
+- playable terminal-game example
+- `nexus_studio.nx`: calculator, guess game, mini battle, terminal game and runtime diagnostics
+- parser fix for simple conditions such as `while running { ... }`
 
-## v0.3.0 — Global Update
-
-Working now:
+## Existing language features
 
 - C++20 compiler
 - lexer + recursive-descent / precedence parser
 - AST + semantic/type checking
 - `i64`, `f64`, `bool`, `string`, pointers and user-defined structs
-- functions, recursion and external function declarations
+- functions and recursion
 - `if` / `else if` / `else`, `while`, `break`, `continue`
 - arithmetic, comparison and logical expressions
 - mutable variables and mutable struct fields
+- fixed-size arrays with bounds checking
+- unit enums and `match`
 - LLVM IR generation and native linking through Clang
-- source imports for local `.nx` modules
-- project scaffolding with `nexus new` / `nexus init`
-- `nexus.toml` project entry point
-- fixed-size arrays, indexed access and bounds checks
-- unit enums, `Enum::Variant` and `match` with wildcard `_`
-- target model and `nexus targets`
-- installable runtime discovery
-- CMake + tests + GitHub CI
+- local source imports
+- `nexus.toml`
+- `nexus new` / `nexus init`
+- target selection and `nexus targets`
+- C FFI declarations
+- CMake, tests and GitHub CI
 
-Experimental / in progress:
+Still experimental / planned:
 
-- enum payloads/generic enums are not yet implemented
-- package registry and dependency solving are planned
-- LSP, async runtime and full cross-platform native CI are planned
+- enum payloads and full generic types
+- package registry and dependency solving
+- HIR/MIR compiler layers
+- LSP
+- full async runtime
+- verified native cross-compilation toolchains for every advertised target
+- graphical backend (the current game API is terminal-native)
 
 ## Build on Debian 13
 
@@ -52,17 +61,17 @@ cmake --build build -j$(nproc)
 ctest --test-dir build --output-on-failure
 ```
 
-You need C++20, CMake, Ninja and an LLVM-compatible Clang. This tree uses Clang 17 in the current Debian development environment to consume generated LLVM IR.
+You need C++20, CMake, Ninja and an LLVM-compatible Clang. The current Debian development environment uses Clang to consume generated LLVM IR.
 
 ## First program
 
 ```bash
-./build/nexus new hello
+./build/nexus new hello --template cli
 cd hello
 ../nexus/build/nexus run
 ```
 
-Or compile a file directly:
+Direct compilation:
 
 ```bash
 ./build/nexus build examples/hello.nx -o hello
@@ -81,43 +90,104 @@ Emit LLVM IR:
 ./build/nexus build examples/hello.nx --emit-ir
 ```
 
-## Language examples
+## Create an application
 
-### Structs
-
-```nx
-struct Player {
-    id: i64
-    health: i64
-    speed: f64
-}
-
-fn main() {
-    let mut p = Player { id: 1, health: 100, speed: 4.5 }
-    p.health = p.health - 10
-    print(p.health)
-}
+```bash
+./build/nexus new myapp --template app
+cd myapp
+../nexus/build/nexus run
 ```
 
-### Pointers
+The generated app already has input, a menu, calculator logic and runtime calls.
 
-```nx
-fn main() {
-    let mut x = 10
-    let p = &x
-    x = 42
-    print(*p)
-}
+## Create a game
+
+```bash
+./build/nexus new mygame --template game
+cd mygame
+../nexus/build/nexus build
+../nexus/build/nexus run
 ```
 
-### Local modules
+The generated game supports:
+
+- WASD movement
+- live keyboard polling
+- terminal rendering
+- score
+- frame timing
+- clean terminal shutdown
+
+## Interactive examples
+
+### Full studio showcase
+
+```bash
+./build/nexus check examples/nexus_studio.nx
+./build/nexus build examples/nexus_studio.nx -o nexus-studio
+./nexus-studio
+```
+
+It contains:
+
+1. calculator
+2. number guessing game
+3. mini turn-based battle
+4. real-time terminal game
+5. runtime diagnostics
+
+### Save/load application
+
+```bash
+./build/nexus build examples/interactive_cli.nx -o interactive-cli
+./interactive-cli
+```
+
+### Standalone terminal game
+
+```bash
+./build/nexus build examples/terminal_game.nx -o terminal-game
+./terminal-game
+```
+
+Use `WASD` to move and `Q` to quit.
+
+## Interactive runtime API
 
 ```nx
-import "utility.nx"
+let name = input("Name: ")
+let age = input_i64("Age: ")
+print("Hello, " + name)
+print(str_i64(age + 1))
+```
 
-fn main() {
-    print(double(21))
+Persistence:
+
+```nx
+file_write("save.txt", "hello")
+let data = file_read("save.txt")
+let exists = file_exists("save.txt")
+let home = env("HOME")
+```
+
+Terminal game loop:
+
+```nx
+screen_begin()
+let mut running = true
+while running {
+    screen_clear()
+    screen_put(10, 5, "@")
+    screen_present()
+
+    if key_pressed() {
+        let key = read_key()
+        if key == 113 { running = false }
+    }
+
+    sleep(30)
 }
+screen_end()
 ```
 
 ## Targets
@@ -126,50 +196,22 @@ fn main() {
 ./build/nexus targets
 ```
 
-The compiler exposes these target names:
+The compiler exposes:
 
-- `native`
-- `x86_64-linux`
-- `aarch64-linux`
-- `x86_64-windows`
-- `aarch64-windows`
-- `x86_64-macos`
-- `aarch64-macos`
-- `aarch64-android`
-- `wasm32-wasi`
+```text
+native
+x86_64-linux
+aarch64-linux
+x86_64-windows
+aarch64-windows
+x86_64-macos
+aarch64-macos
+aarch64-android
+wasm32-wasi
+```
 
-LLVM IR can be emitted for any configured target. Native linking only succeeds when the current machine has a compatible Clang target toolchain/sysroot.
+Target-specific native linking still depends on the toolchain/sysroot installed on the build machine. Linux x86_64 is the validated native development target in this repository.
 
 ## Repository
 
-GitHub target: `https://github.com/fanxcz/nexus`
-
-## v0.3 language features
-
-```nx
-let mut values = [10, 20, 30]
-values[1] = 99
-print(values[1])
-```
-
-```nx
-enum Color { Red, Green, Blue }
-
-match color {
-    Color::Red => { print("red") }
-    Color::Green => { print("green") }
-    _ => { print("other") }
-}
-```
-
-Arrays use compile-time checking for constant indices and a runtime bounds check for dynamic indices.
-
-### Maximum v0.3 showcase
-
-```bash
-./build/nexus check examples/nexus_arena.nx
-./build/nexus build examples/nexus_arena.nx -o nexus-arena
-./nexus-arena
-```
-
-The Arena is deterministic and intentionally uses only features that are implemented in the current compiler.
+https://github.com/fanxcz/nexus
