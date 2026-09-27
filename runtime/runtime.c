@@ -3,6 +3,7 @@
 #include <stdbool.h>
 #include <stdlib.h>
 void nexus_print_i64(int64_t x){printf("%lld\n",(long long)x);}
+void nexus_print_f64(double x){printf("%.15g\n",x);}
 void nexus_print_bool(bool x){puts(x?"true":"false");}
 void nexus_print_str(const char* x){puts(x?x:"null");}
 void* nexus_alloc(size_t n){return malloc(n);}

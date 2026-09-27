@@ -1,21 +1,26 @@
 # Targets
 
-Nexus separates the compiler host from the generated-program target.
+Nexus separates the **host that runs the compiler** from the **target produced by the compiler**.
 
-## Implemented
+## Target names exposed by the CLI
 
-- `x86_64-linux`: native v0.1 target tested on Debian 13.
+```text
+native
+x86_64-linux
+aarch64-linux
+x86_64-windows
+aarch64-windows
+x86_64-macos
+aarch64-macos
+aarch64-android
+wasm32-wasi
+```
 
-## Planned
+## Verified in this repository
 
-- `aarch64-linux`
-- `x86_64-windows-gnu`
-- `x86_64-windows-msvc`
-- `aarch64-windows`
-- `x86_64-macos`
-- `aarch64-macos`
-- `aarch64-android`
-- `wasm32-wasi`
-- freestanding `x86_64-none`, `aarch64-none`, `riscv64-none`
+- `native` / Linux x86_64: native executable build and run tested on Debian 13.
+- `x86_64-windows`: LLVM IR target selection tested; native linking requires a Windows-compatible sysroot/toolchain that is not installed in the Debian development environment.
 
-A target is only marked supported after its compiler/toolchain, runtime, linker and CI path are tested. The frontend is not tied to Linux.
+The remaining targets are accepted by the target layer and can emit target-specific LLVM IR, but they are **not claimed as fully supported native platforms** until their toolchain/runtime/CI paths are verified.
+
+The language frontend itself is target-independent.

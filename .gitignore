@@ -1,13 +1,11 @@
 build/
+*.ll
 *.o
 *.obj
 *.a
 *.so
 *.dll
 *.exe
-*.ll
 .cache/
 .ninja/
 compile_commands.json
-.vscode/
-.idea/

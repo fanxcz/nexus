@@ -5,17 +5,43 @@ Nexus source
    |
  Lexer
    |
- Parser -> AST
+ Parser
    |
- Semantic analysis
+ AST
    |
- Target-independent compiler data
+ Name / type analysis
+   |
+ Target-independent Nexus representation
    |
  LLVM IR generator
    |
- Clang/LLVM target backend
+ LLVM target triple
    |
- Native executable
+ Clang/LLVM + platform toolchain
+   |
+ Native executable / object / WASM
 ```
 
-The compiler is designed around host/target separation. Platform-specific runtime and linker logic must stay outside the language frontend.
+The compiler deliberately separates:
+
+- host platform
+- target platform
+- target triple
+- runtime
+- linker/toolchain
+
+The frontend does not contain Linux-specific logic. Platform-specific behavior belongs in the runtime/toolchain layer.
+
+## v0.2 compiler modules
+
+```text
+compiler/
+├── lexer/
+├── parser/
+├── ast/
+├── semantic/
+├── codegen/
+└── driver/
+```
+
+The next architectural step is to add explicit HIR/MIR layers between semantic analysis and LLVM so increasingly advanced language features do not leak backend concerns into the parser.

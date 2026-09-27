@@ -9,7 +9,7 @@ sudo apt update
 sudo apt install -y build-essential cmake ninja-build git clang lld
 ```
 
-Check:
+Verify:
 
 ```bash
 c++ --version
@@ -19,4 +19,20 @@ clang --version
 ld.lld --version
 ```
 
-The v0.1 backend emits textual LLVM IR and asks Clang to lower/link it. This keeps the source tree buildable even when distro LLVM development headers are unavailable. A future LLVM-C++ backend can be selected when LLVM development packages are installed.
+The current backend emits textual LLVM IR and invokes Clang/LLVM for native lowering and linking. This keeps the project buildable even when distro LLVM C++ development headers are unavailable.
+
+## Build
+
+```bash
+cmake -S . -B build -G Ninja
+cmake --build build -j$(nproc)
+ctest --test-dir build --output-on-failure
+```
+
+## Install
+
+```bash
+cmake --install build --prefix ~/.local
+```
+
+The runtime is installed next to the compiler's data files, so `nexus run` can work from another directory.

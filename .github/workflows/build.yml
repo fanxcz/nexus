@@ -1,17 +1,40 @@
 name: build
-on: [push, pull_request]
+
+on:
+  push:
+  pull_request:
+
 jobs:
-  build-linux:
-    runs-on: ubuntu-latest
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
-      - name: Install toolchain
+
+      - name: Install Linux toolchain
+        if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y cmake ninja-build clang lld
+
+      - name: Install Windows toolchain
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: choco install ninja llvm -y
+
+      - name: Install macOS toolchain
+        if: runner.os == 'macOS'
+        run: brew install ninja llvm
+
       - name: Configure
         run: cmake -S . -B build -G Ninja -DNEXUS_BUILD_TESTS=ON
+
       - name: Build
         run: cmake --build build
+
       - name: Test
         run: ctest --test-dir build --output-on-failure
+
       - name: Smoke test
         run: ./build/nexus run examples/hello.nx
