@@ -196,6 +196,7 @@ constexpr GLenum GL_UNSIGNED_BYTE = 0x1401;
 constexpr GLenum GL_TEXTURE_MIN_FILTER = 0x2801;
 constexpr GLenum GL_TEXTURE_MAG_FILTER = 0x2800;
 constexpr GLenum GL_LINEAR = 0x2601;
+constexpr GLenum GL_NEAREST = 0x2600;
 constexpr GLenum GL_MODELVIEW = 0x1700;
 constexpr GLenum GL_PROJECTION = 0x1701;
 constexpr GLenum GL_QUADS = 0x0007;
@@ -354,6 +355,23 @@ struct EcsEntity {
 };
 static std::unordered_map<int64_t, EcsEntity> gEntities;
 static int64_t gNextEntity = 1;
+
+struct SpriteAnim {
+    int64_t texture=0;
+    int64_t frameW=0, frameH=0, columns=1, frameCount=1;
+    double fps=8.0;
+    bool loop=true;
+    double time=0.0;
+    int64_t frame=0;
+};
+static std::unordered_map<int64_t, SpriteAnim> gAnims;
+static int64_t gNextAnim = 1;
+
+struct SceneData {
+    std::vector<EcsEntity> entities;
+};
+static std::unordered_map<int64_t, SceneData> gScenes;
+static int64_t gNextScene = 1;
 
 struct Model3D {
     std::vector<float> vertices; // xyz triples, triangle list
@@ -618,17 +636,64 @@ static bool ensure_audio_device(const SDL_AudioSpec& wanted) {
     if(gAudioDevice) return true;
     if(!SDL_OpenAudioDevice || !SDL_PauseAudioDevice) { gAudioError = "SDL2 audio queue API unavailable"; return false; }
     SDL_AudioSpec obtained{};
-    gAudioDevice = SDL_OpenAudioDevice(nullptr, 0, &wanted, &obtained, 0);
+    constexpr int ALLOW_FREQUENCY_CHANGE = 0x0001;
+    constexpr int ALLOW_FORMAT_CHANGE = 0x0002;
+    constexpr int ALLOW_CHANNELS_CHANGE = 0x0004;
+    const int allowed = ALLOW_FREQUENCY_CHANGE | ALLOW_FORMAT_CHANGE | ALLOW_CHANNELS_CHANGE;
+    gAudioDevice = SDL_OpenAudioDevice(nullptr, 0, &wanted, &obtained, allowed);
     if(!gAudioDevice) { gAudioError = std::string("SDL_OpenAudioDevice failed: ") + sdl_error(); return false; }
-    // For SDL_QueueAudio the device format must match the buffers we queue.
-    if(obtained.freq != wanted.freq || obtained.format != wanted.format || obtained.channels != wanted.channels) {
-        SDL_CloseAudioDevice(gAudioDevice); gAudioDevice = 0;
-        gAudioError = "audio device format mismatch; use a standard PCM WAV (8/16-bit mono/stereo)";
-        return false;
-    }
     gAudioSpec = obtained;
     SDL_PauseAudioDevice(gAudioDevice, 0);
     return true;
+}
+
+static float pcm_sample(const uint8_t* p, uint16_t format) {
+    if(format == 0x0008u) return (float(int(*p) - 128)) / 128.0f;
+    if(format == 0x8010u) { int16_t v = int16_t(uint16_t(p[0]) | (uint16_t(p[1]) << 8)); return float(v) / 32768.0f; }
+    return 0.0f;
+}
+
+static std::vector<uint8_t> convert_pcm(const std::vector<uint8_t>& src, const SDL_AudioSpec& in, const SDL_AudioSpec& out) {
+    const int inBytes = (in.format == 0x0008u) ? 1 : (in.format == 0x8010u ? 2 : 0);
+    const int outBytes = (out.format == 0x0008u) ? 1 : (out.format == 0x8010u ? 2 : 0);
+    if(inBytes == 0 || outBytes == 0 || in.channels == 0 || out.channels == 0 || in.freq <= 0 || out.freq <= 0) return {};
+    const size_t inFrameBytes = size_t(inBytes) * in.channels;
+    if(inFrameBytes == 0 || src.size() < inFrameBytes) return {};
+    const size_t inFrames = src.size() / inFrameBytes;
+    const size_t outFrames = std::max<size_t>(1, size_t(std::llround(double(inFrames) * double(out.freq) / double(in.freq))));
+    std::vector<float> inF(inFrames * in.channels, 0.0f);
+    for(size_t f=0; f<inFrames; ++f) {
+        for(unsigned c=0; c<in.channels; ++c) inF[f*in.channels+c] = pcm_sample(src.data()+f*inFrameBytes+c*inBytes, in.format);
+    }
+    std::vector<float> outF(outFrames * out.channels, 0.0f);
+    for(size_t of=0; of<outFrames; ++of) {
+        double srcPos = double(of) * double(in.freq) / double(out.freq);
+        size_t i0 = size_t(std::min<double>(std::floor(srcPos), double(inFrames-1)));
+        size_t i1 = std::min(i0+1, inFrames-1);
+        float frac = float(srcPos - double(i0));
+        auto chan = [&](unsigned c)->float {
+            if(in.channels == 1) return inF[i0] * (1.0f-frac) + inF[i1] * frac;
+            if(out.channels == 1) {
+                float a0=inF[i0*in.channels+0], a1=inF[i0*in.channels+std::min<unsigned>(1,in.channels-1)];
+                float b0=inF[i1*in.channels+0], b1=inF[i1*in.channels+std::min<unsigned>(1,in.channels-1)];
+                return ((a0+a1)*0.5f)*(1.0f-frac) + ((b0+b1)*0.5f)*frac;
+            }
+            unsigned srcC = std::min<unsigned>(c, in.channels-1);
+            return inF[i0*in.channels+srcC] * (1.0f-frac) + inF[i1*in.channels+srcC] * frac;
+        };
+        for(unsigned c=0;c<out.channels;++c) outF[of*out.channels+c]=std::clamp(chan(c),-1.0f,1.0f);
+    }
+    std::vector<uint8_t> converted(outF.size()*size_t(outBytes));
+    for(size_t i=0;i<outF.size();++i) {
+        if(out.format == 0x8010u) {
+            int v=int(std::lrint(std::clamp(outF[i],-1.0f,1.0f)*32767.0f));
+            converted[i*2]=uint8_t(v&0xff); converted[i*2+1]=uint8_t((uint16_t(v)>>8)&0xff);
+        } else {
+            int v=128+int(std::lrint(std::clamp(outF[i],-1.0f,1.0f)*127.0f));
+            converted[i]=uint8_t(std::clamp(v,0,255));
+        }
+    }
+    return converted;
 }
 
 static bool init_graphics(int w,int h,const char* title){
@@ -656,7 +721,7 @@ static bool init_graphics(int w,int h,const char* title){
 static void shutdown_graphics(){
     if(gMusic&&Mix_FreeMusic){Mix_FreeMusic(gMusic);gMusic=nullptr;} if(Mix_CloseAudio&&gMixerReady)Mix_CloseAudio(); gMixerReady=false; if(gAudioDevice&&SDL_CloseAudioDevice){SDL_CloseAudioDevice(gAudioDevice);gAudioDevice=0;} gAudio=false; gAudioError.clear();
     for(auto&[id,f]:gFonts){if(TTF_CloseFont&&f)TTF_CloseFont(f);} gFonts.clear(); if(TTF_Quit&&gTTFReady)TTF_Quit(); gTTFReady=false;
-    if(!gGraphics)return; if(gGL&&SDL_GL_DeleteContext)SDL_GL_DeleteContext(gGL);gGL=nullptr;if(gWindow&&SDL_DestroyWindow)SDL_DestroyWindow(gWindow);gWindow=nullptr;gTextures.clear();gSounds.clear();gModels.clear();gParticles.clear();if(SDL_Quit)SDL_Quit();gGraphics=false;gEntities.clear();gCameraX=0;gCameraY=0;gCameraZoom=1;
+    if(!gGraphics)return; if(gGL&&SDL_GL_DeleteContext)SDL_GL_DeleteContext(gGL);gGL=nullptr;if(gWindow&&SDL_DestroyWindow)SDL_DestroyWindow(gWindow);gWindow=nullptr;gTextures.clear();gSounds.clear();gModels.clear();gParticles.clear();gAnims.clear();gScenes.clear();if(SDL_Quit)SDL_Quit();gGraphics=false;gEntities.clear();gCameraX=0;gCameraY=0;gCameraZoom=1;
 }
 
 } // namespace
@@ -665,6 +730,8 @@ extern "C" {
 
 // Existing runtime API -------------------------------------------------------
 static char* nx_strdup(const char* src){if(!src)src="";size_t n=std::strlen(src);char* out=(char*)std::malloc(n+1);if(!out)return nullptr;std::memcpy(out,src,n+1);return out;}
+double nexus_sqrt(double x){return std::sqrt(std::max(0.0,x));}
+double nexus_to_f64(int64_t x){return double(x);}
 void nexus_print_i64(int64_t x){std::printf("%lld\n",(long long)x);} void nexus_print_f64(double x){std::printf("%.15g\n",x);} void nexus_print_bool(bool x){std::puts(x?"true":"false");} void nexus_print_str(const char*x){std::puts(x?x:"null");}
 void* nexus_alloc(size_t n){return std::malloc(n);} void nexus_free(void*p){std::free(p);} void nexus_bounds_check(int64_t i,int64_t n){if(i<0||i>=n){std::fprintf(stderr,"Nexus runtime error: array index %lld out of bounds for size %lld\n",(long long)i,(long long)n);std::exit(1);}}
 char* nexus_str_concat(const char*a,const char*b){if(!a)a="";if(!b)b="";size_t la=std::strlen(a),lb=std::strlen(b);char*out=(char*)std::malloc(la+lb+1);if(!out)return nullptr;std::memcpy(out,a,la);std::memcpy(out+la,b,lb);out[la+lb]=0;return out;} bool nexus_str_equal(const char*a,const char*b){return a==b||(!a&&!b)||(a&&b&&std::strcmp(a,b)==0);}
@@ -725,11 +792,24 @@ int64_t nexus_gfx_texture_load(const char*path){
 void nexus_gfx_texture_draw(int64_t id,double x,double y,double w,double h,double r,double g,double b,double a){auto it=gTextures.find(id);if(!gGraphics||it==gTextures.end())return;setup_2d();draw_textured_quad(it->second,float(x),float(y),float(w),float(h),float(r),float(g),float(b),float(a));}
 void nexus_gfx_texture_unload(int64_t id){auto it=gTextures.find(id);if(it==gTextures.end())return;if(gGraphics&&it->second.id)glDeleteTextures(1,&it->second.id);gTextures.erase(it);}
 int64_t nexus_gfx_texture_width(int64_t id){auto it=gTextures.find(id);return it==gTextures.end()?0:it->second.w;}int64_t nexus_gfx_texture_height(int64_t id){auto it=gTextures.find(id);return it==gTextures.end()?0:it->second.h;}
+void nexus_gfx_texture_filter(int64_t id,bool nearest){auto it=gTextures.find(id);if(it==gTextures.end()||!gGraphics)return;glBindTexture(GL_TEXTURE_2D,it->second.id);GLint f=nearest?GL_NEAREST:GL_LINEAR;glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_MIN_FILTER,f);glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_MAG_FILTER,f);glBindTexture(GL_TEXTURE_2D,0);}
 
 void nexus_gfx_camera_set(double x,double y,double zoom){gCameraX=float(x);gCameraY=float(y);gCameraZoom=zoom>0.01?float(zoom):0.01f;}
 void nexus_gfx_camera_reset(){gCameraX=0;gCameraY=0;gCameraZoom=1;}
 void nexus_gfx_texture_draw_frame(int64_t id,double x,double y,double w,double h,int64_t frame,int64_t frameW,int64_t frameH,int64_t columns,double r,double g,double b,double a){
     auto it=gTextures.find(id);if(!gGraphics||it==gTextures.end()||frameW<=0||frameH<=0||columns<=0)return;setup_2d();const Texture&t=it->second;int64_t col=frame%columns,row=frame/columns;float u0=float(col*frameW)/float(t.w),v0=float(row*frameH)/float(t.h),u1=float((col+1)*frameW)/float(t.w),v1=float((row+1)*frameH)/float(t.h);glEnable(GL_TEXTURE_2D);glBindTexture(GL_TEXTURE_2D,t.id);glColor4f(float(r),float(g),float(b),float(a));glBegin(GL_QUADS);glTexCoord2f(u0,v0);glVertex2f(float(x),float(y));glTexCoord2f(u1,v0);glVertex2f(float(x+w),float(y));glTexCoord2f(u1,v1);glVertex2f(float(x+w),float(y+h));glTexCoord2f(u0,v1);glVertex2f(float(x),float(y+h));glEnd();glBindTexture(GL_TEXTURE_2D,0);glDisable(GL_TEXTURE_2D);}
+int64_t nexus_gfx_anim_create(int64_t texture,int64_t frameW,int64_t frameH,int64_t columns,int64_t frameCount,double fps,bool loop){
+    auto it=gTextures.find(texture);
+    if(it==gTextures.end()||frameW<=0||frameH<=0||columns<=0||frameCount<=0||fps<=0.0){gGraphicsError="invalid sprite animation parameters";return 0;}
+    if(frameW>it->second.w||frameH>it->second.h){gGraphicsError="sprite frame exceeds texture dimensions";return 0;}
+    SpriteAnim a; a.texture=texture;a.frameW=frameW;a.frameH=frameH;a.columns=columns;a.frameCount=frameCount;a.fps=fps;a.loop=loop;
+    int64_t id=gNextAnim++;gAnims[id]=a;return id;
+}
+void nexus_gfx_anim_update(int64_t id,double dt){auto it=gAnims.find(id);if(it==gAnims.end())return;auto&a=it->second;if(a.frameCount<=1)return;a.time+=std::max(dt,0.0);double step=1.0/a.fps;while(a.time>=step){a.time-=step;++a.frame;if(a.frame>=a.frameCount){if(a.loop)a.frame=0;else a.frame=a.frameCount-1;}}}
+void nexus_gfx_anim_draw(int64_t id,double x,double y,double w,double h,double r,double g,double b,double a){auto it=gAnims.find(id);if(it==gAnims.end())return;const auto&v=it->second;nexus_gfx_texture_draw_frame(v.texture,x,y,w,h,v.frame,v.frameW,v.frameH,v.columns,r,g,b,a);}
+int64_t nexus_gfx_anim_frame(int64_t id){auto it=gAnims.find(id);return it==gAnims.end()?-1:it->second.frame;}
+void nexus_gfx_anim_destroy(int64_t id){gAnims.erase(id);}
+
 const char* nexus_gfx_image_type(){return IMG_Load?"PNG/JPG/BMP (SDL2_image + SDL2 core)":"BMP only (install SDL2_image for PNG/JPG)";}
 int64_t nexus_gfx_font_load(const char*path,int64_t size){load_optional_media_libs();if(!gTTF||!TTF_Init||!TTF_OpenFont||!TTF_CloseFont||!TTF_RenderUTF8_Blended||size<=0){gGraphicsError="TTF font backend unavailable; install SDL2_ttf";return 0;}if(!gTTFReady&&TTF_Init()!=0){gGraphicsError=TTF_GetError?TTF_GetError():"TTF_Init failed";return 0;}gTTFReady=true;TTF_Font*f=TTF_OpenFont(path,int(size));if(!f){gGraphicsError=TTF_GetError?TTF_GetError():"font load failed";return 0;}int64_t id=gNextFont++;gFonts[id]=f;return id;}
 void nexus_gfx_text_font(int64_t id,double x,double y,const char*text,double r,double g,double b,double a){auto it=gFonts.find(id);if(!gGraphics||it==gFonts.end()||!TTF_RenderUTF8_Blended)return;SDL_Color c{uint8_t(std::clamp(r,0.0,1.0)*255.0),uint8_t(std::clamp(g,0.0,1.0)*255.0),uint8_t(std::clamp(b,0.0,1.0)*255.0),uint8_t(std::clamp(a,0.0,1.0)*255.0)};SDL_Surface*s=TTF_RenderUTF8_Blended(it->second,text?text:"",c);if(!s)return;SDL_Surface*surf=SDL_ConvertSurfaceFormat(s,SDL_PIXELFORMAT_ABGR8888,0);SDL_FreeSurface(s);if(!surf)return;GLuint tex=0;glGenTextures(1,&tex);glBindTexture(GL_TEXTURE_2D,tex);glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_MIN_FILTER,GL_LINEAR);glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_MAG_FILTER,GL_LINEAR);glTexImage2D(GL_TEXTURE_2D,0,4,surf->w,surf->h,0,GL_RGBA,GL_UNSIGNED_BYTE,surf->pixels);setup_2d();glEnable(GL_TEXTURE_2D);glBindTexture(GL_TEXTURE_2D,tex);glColor4f(1,1,1,1);glBegin(GL_QUADS);glTexCoord2f(0,0);glVertex2f(float(x),float(y));glTexCoord2f(1,0);glVertex2f(float(x+surf->w),float(y));glTexCoord2f(1,1);glVertex2f(float(x+surf->w),float(y+surf->h));glTexCoord2f(0,1);glVertex2f(float(x),float(y+surf->h));glEnd();glBindTexture(GL_TEXTURE_2D,0);glDisable(GL_TEXTURE_2D);glDeleteTextures(1,&tex);SDL_FreeSurface(surf);}
@@ -758,6 +838,24 @@ bool nexus_ui_button(double x,double y,double w,double h,const char*label){bool 
 void nexus_ui_panel(double x,double y,double w,double h,double r,double g,double b,double a){nexus_gfx_rect(x,y,w,h,r,g,b,a);}
 void nexus_ui_label(double x,double y,const char*text,double scale){nexus_gfx_text(x,y,scale,text,1,1,1,1);}
 void nexus_ui_progress(double x,double y,double w,double h,double value,double r,double g,double b,double a){nexus_gfx_rect(x,y,w,h,0.12,0.14,0.18,1);double v=std::clamp(value,0.0,1.0);nexus_gfx_rect(x,y,w*v,h,r,g,b,a);}
+bool nexus_ui_checkbox(double x,double y,const char*label,bool checked){
+    bool hover=false;int mx=0,my=0;if(gGraphics&&SDL_GetMouseState){SDL_GetMouseState(&mx,&my);hover=mx>=x&&mx<=x+28&&my>=y&&my<=y+28;}
+    bool on=checked; if(hover&&gMouseClicked) on=!checked; nexus_gfx_rect(x,y,28,28,0.10,0.12,0.18,1.0); if(on)nexus_gfx_rect(x+5,y+5,18,18,0.2,0.75,1.0,1.0); if(label)nexus_gfx_text(x+40,y+2,1.4,label,1,1,1,1); return on;
+}
+double nexus_ui_slider(double x,double y,double w,double h,double value){
+    double v=std::clamp(value,0.0,1.0);int mx=0,my=0;bool down=false;if(gGraphics&&SDL_GetMouseState){uint32_t b=SDL_GetMouseState(&mx,&my);down=(b&1u)!=0;}
+    bool hover=mx>=x&&mx<=x+w&&my>=y&&my<=y+h;if(down&&hover)v=std::clamp((double(mx)-x)/std::max(w,1.0),0.0,1.0);
+    nexus_gfx_rect(x,y+h*0.35,w,h*0.3,0.12,0.14,0.18,1.0);nexus_gfx_rect(x,y+h*0.35,w*v,h*0.3,0.2,0.65,1.0,1.0);nexus_gfx_circle(x+w*v,y+h*0.5,h*0.7,0.9,0.95,1.0,1.0);
+    return v;
+}
+bool nexus_physics_aabb(double ax,double ay,double aw,double ah,double bx,double by,double bw,double bh){return ax<bx+bw&&ax+aw>bx&&ay<by+bh&&ay+ah>by;}
+bool nexus_physics_circle(double ax,double ay,double ar,double bx,double by,double br){double dx=ax-bx,dy=ay-by,r=ar+br;return dx*dx+dy*dy<=r*r;}
+int64_t nexus_scene_create(){int64_t id=gNextScene++;gScenes[id]=SceneData{};return id;}
+void nexus_scene_add(int64_t scene,int64_t entity){auto sit=gScenes.find(scene);auto eit=gEntities.find(entity);if(sit!=gScenes.end()&&eit!=gEntities.end())sit->second.entities.push_back(eit->second);}
+bool nexus_scene_save(int64_t scene,const char*path){auto sit=gScenes.find(scene);if(sit==gScenes.end()||!path)return false;std::ofstream f(path);if(!f)return false;f<<"NEXUS_SCENE 1\n"<<sit->second.entities.size()<<"\n";for(const auto&e:sit->second.entities){f<<e.x<<' '<<e.y<<' '<<e.vx<<' '<<e.vy<<' '<<e.w<<' '<<e.h<<' '<<e.r<<' '<<e.g<<' '<<e.b<<' '<<e.a<<' '<<e.texture<<"\n";}return true;}
+int64_t nexus_scene_load(const char*path){if(!path)return 0;std::ifstream f(path);if(!f)return 0;std::string magic;int version=0,count=0;f>>magic>>version>>count;if(magic!="NEXUS_SCENE"||version!=1||count<0||count>100000)return 0;int64_t sid=nexus_scene_create();auto&out=gScenes[sid].entities;for(int i=0;i<count;++i){EcsEntity e;if(!(f>>e.x>>e.y>>e.vx>>e.vy>>e.w>>e.h>>e.r>>e.g>>e.b>>e.a>>e.texture)){gScenes.erase(sid);return 0;}out.push_back(e);}return sid;}
+void nexus_scene_destroy(int64_t id){gScenes.erase(id);}
+void nexus_scene_clear(int64_t id){auto it=gScenes.find(id);if(it!=gScenes.end())it->second.entities.clear();}
 int64_t nexus_ecs_create(){int64_t id=gNextEntity++;gEntities[id]=EcsEntity{};return id;}
 void nexus_ecs_destroy(int64_t id){gEntities.erase(id);}
 bool nexus_ecs_alive(int64_t id){return gEntities.contains(id);}
@@ -817,11 +915,43 @@ int64_t nexus_gfx_sound_load(const char*path){
     gAudioError.clear();
     if(!load_sdl()||!path||!SDL_OpenAudioDevice||!SDL_CloseAudioDevice||!SDL_PauseAudioDevice||!SDL_QueueAudio||!SDL_GetQueuedAudioSize){gAudioError="SDL2 core audio API unavailable";gGraphicsError=gAudioError;return 0;}
     if(SDL_Init(0x00000010u)!=0){gAudioError=std::string("SDL audio init failed: ")+sdl_error();gGraphicsError=gAudioError;return 0;}
-    SDL_AudioSpec spec{};std::vector<uint8_t> data;std::string err;
-    if(!load_pcm_wav(path,spec,data,err)){gAudioError=err;gGraphicsError=err;return 0;}
-    if(!ensure_audio_device(spec)){gGraphicsError=gAudioError;return 0;}
-    Sound s; s.data=std::move(data);s.freq=spec.freq;s.format=spec.format;s.channels=spec.channels;s.samples=spec.samples;
+    SDL_AudioSpec source{};std::vector<uint8_t> raw;std::string err;
+    if(!load_pcm_wav(path,source,raw,err)){gAudioError=err;gGraphicsError=err;return 0;}
+    if(!ensure_audio_device(source)){gGraphicsError=gAudioError;return 0;}
+    std::vector<uint8_t> converted = convert_pcm(raw, source, gAudioSpec);
+    if(converted.empty()){gAudioError="failed to convert WAV to the active audio device format";gGraphicsError=gAudioError;return 0;}
+    Sound s; s.data=std::move(converted);s.freq=gAudioSpec.freq;s.format=gAudioSpec.format;s.channels=gAudioSpec.channels;s.samples=gAudioSpec.samples;
     int64_t id=gNextSound++;gSounds[id]=std::move(s);gAudio=true;return id;
+}
+
+void nexus_gfx_sound_tone(double frequency,int64_t durationMs,double volume){
+    gAudioError.clear();
+    if(!load_sdl()||!SDL_OpenAudioDevice||!SDL_CloseAudioDevice||!SDL_PauseAudioDevice||!SDL_QueueAudio){gAudioError="SDL2 audio queue API unavailable";return;}
+    if(SDL_Init(0x00000010u)!=0){gAudioError=std::string("SDL audio init failed: ")+sdl_error();return;}
+    SDL_AudioSpec wanted{}; wanted.freq=48000; wanted.format=0x8010u; wanted.channels=2; wanted.samples=1024;
+    if(!ensure_audio_device(wanted)){return;}
+    const double freq=std::max(20.0,std::min(20000.0,frequency));
+    const int ms=std::max<int64_t>(8,std::min<int64_t>(durationMs,2000));
+    const int frames=int((int64_t(gAudioSpec.freq)*ms)/1000);
+    const int channels=std::max<int>(1,gAudioSpec.channels);
+    const int bytes=(gAudioSpec.format==0x0008u)?1:(gAudioSpec.format==0x8010u?2:0);
+    if(bytes==0){gAudioError="unsupported active audio format";return;}
+    std::vector<uint8_t> data(size_t(frames)*size_t(channels)*size_t(bytes));
+    double amp=std::clamp(volume,0.0,1.0);
+    for(int i=0;i<frames;++i){
+        double t=double(i)/double(gAudioSpec.freq);
+        double fadeIn=std::min(1.0,t/0.006);
+        double fadeOut=std::min(1.0,double(frames-i)/double(gAudioSpec.freq)*18.0);
+        double sample=std::sin(2.0*3.141592653589793*freq*t)*amp*fadeIn*fadeOut;
+        for(int c=0;c<channels;++c){
+            size_t at=(size_t(i)*size_t(channels)+size_t(c))*size_t(bytes);
+            if(bytes==2){int v=int(std::lrint(sample*32767.0));data[at]=uint8_t(v&0xff);data[at+1]=uint8_t((uint16_t(v)>>8)&0xff);}
+            else data[at]=uint8_t(std::clamp(128+int(std::lrint(sample*127.0)),0,255));
+        }
+    }
+    if(SDL_ClearQueuedAudio) SDL_ClearQueuedAudio(gAudioDevice);
+    if(SDL_QueueAudio(gAudioDevice,data.data(),uint32_t(data.size()))!=0) gAudioError="SDL_QueueAudio failed";
+    else gAudio=true;
 }
 void nexus_gfx_sound_play(int64_t id,bool loop){
     auto it=gSounds.find(id);if(it==gSounds.end()){gAudioError="unknown sound id";return;}

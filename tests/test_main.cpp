@@ -59,6 +59,10 @@ int main(){
             auto p=parse("fn main(){ let m=gfx3d_model_load(\"examples/assets/cube.obj\"); gfx3d_model_draw(m,0.0,0.0,0.0,1.0,1.0,1.0,0.0,0.0,0.0); gfx3d_model_unload(m); let p=gfx_particle_create(0.0,0.0,1.0,1.0,1.0,4.0,1.0,0.0,0.0,1.0); gfx_particle_alive(p); gfx_particles_update(0.016); gfx_particles_draw(); gfx_particle_destroy(p); }");
             nexus::SemanticAnalyzer().analyze(p);
         }
+        {
+            auto p=parse("fn main(){ let s=scene_create(); let e=ecs_create(); ecs_set_position(e,10.0,20.0); ecs_set_size(e,32.0,32.0); scene_add(s,e); scene_save(s,\"/tmp/nexus-scene.nxs\"); let s2=scene_load(\"/tmp/nexus-scene.nxs\"); scene_clear(s2); scene_destroy(s2); scene_destroy(s); let hit=physics_aabb(0.0,0.0,10.0,10.0,5.0,5.0,4.0,4.0); let circ=physics_circle(0.0,0.0,5.0,6.0,0.0,2.0); let a=gfx_anim_create(1,16,16,4,8,12.0,true); gfx_anim_update(a,0.1); gfx_anim_frame(a); gfx_anim_destroy(a); ui_checkbox(10.0,10.0,\"Ready\",true); ui_slider(10.0,50.0,200.0,20.0,0.5); }" );
+            nexus::SemanticAnalyzer().analyze(p);
+        }
         std::cout<<"Nexus tests: PASS\n";
         return 0;
     } catch(const std::exception&e){

@@ -1,5 +1,38 @@
 # NEXUS
 
+## v0.8.1 — Normal Game Template and Reliable Audio
+
+- `neon_survivor.nx`: centered playable top-down shooter
+- procedural `gfx_sound_tone()` for guaranteed game SFX without external assets
+- WAV output is converted to the active SDL audio format
+- `nexus new <project> --template game` now uses the real game template
+
+## v0.8.0 — Scenes, Sprite Animation, Physics and GUI Controls
+
+NEXUS v0.8 adds a higher-level game/app layer on top of the native SDL2/OpenGL runtime.
+
+New runtime APIs include:
+- sprite animation handles with FPS, looping and frame queries
+- texture filtering (nearest/linear)
+- 2D AABB and circle collision helpers
+- scene create/add/save/load/clear/destroy with a small deterministic `.nxs` scene format
+- GUI checkbox and slider widgets
+- existing ECS, particles, audio, fonts, textures, models and 2D/3D rendering remain available
+
+Example APIs:
+
+```nx
+let scene = scene_create()
+let player = ecs_create()
+ecs_set_position(player, 120.0, 180.0)
+scene_add(scene, player)
+scene_save(scene, "save.nxs")
+
+if physics_aabb(120.0, 180.0, 48.0, 48.0, 200.0, 180.0, 48.0, 48.0) {
+    print("collision")
+}
+```
+
 NEXUS is a universal programming language with a C++20 compiler, LLVM-compatible native code generation, and a growing cross-platform runtime. The compiler is developed on Debian 13, while the language frontend is designed to stay platform-independent.
 
 ## v0.7.0 — Native Game/App Runtime + Reliable Audio

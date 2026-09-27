@@ -1,4 +1,21 @@
+## v0.8.1
+
+- Replaced the demo game template with a centered playable top-down shooter.
+- Added procedural audio tones and robust PCM WAV conversion to the active SDL audio device.
+- Added `sqrt` and `to_f64` builtins needed for game math.
+- Installed game templates under `share/nexus/templates`.
+
 # Changelog
+
+## [0.8.0] - 2026-09-27
+
+- Added sprite animation runtime with time-based frame progression and loop control.
+- Added texture nearest/linear filtering.
+- Added AABB and circle collision helpers.
+- Added scene save/load/clear/destroy runtime with a deterministic text format.
+- Added GUI checkbox and slider widgets.
+- Added regression coverage for v0.8 builtins.
+
 
 ## [0.7.0] - 2026-09-27
 
