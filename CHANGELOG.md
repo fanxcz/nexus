@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.2.1 — String Operations Fix
+
+- Fixed `string + string` semantic checking and LLVM code generation.
+- Added runtime string concatenation.
+- Added runtime string equality for `==` and `!=`.
+- Tightened invalid string comparison diagnostics.
+- Added regression tests for string concatenation and equality.
+
 ## 0.2.0 — Global Update
 
 - Added `f64` numeric literals and arithmetic.

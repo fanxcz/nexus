@@ -2,6 +2,13 @@
 
 Nexus is a universal programming language built around a C++20 compiler and LLVM-compatible native code generation. The compiler is developed on Debian 13, while the language frontend and target model are designed to remain platform-independent.
 
+## v0.2.1 — String Operations Fix
+
+Working now:
+
+- string concatenation with `+`
+- string equality with `==` and `!=`
+
 ## v0.2.0 — Global Update
 
 Working now:

@@ -23,6 +23,10 @@ int main(){
             nexus::SemanticAnalyzer().analyze(p);
         }
         {
+            auto p=parse("fn main(){ let name = \"Nexus\"; print(\"Hello, \" + name); print(name == \"Nexus\"); print(name != \"Other\") }");
+            nexus::SemanticAnalyzer().analyze(p);
+        }
+        {
             bool failed=false;
             try {
                 auto p=parse("fn main(){ let x = 1; x = 2 }");

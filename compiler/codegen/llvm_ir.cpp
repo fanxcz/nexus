@@ -21,7 +21,22 @@ public:
     Type typeOf(const Expr*e){
         if(dynamic_cast<const IntExpr*>(e))return Type::i64(); if(dynamic_cast<const FloatExpr*>(e))return Type::f64(); if(dynamic_cast<const BoolExpr*>(e))return Type::boolean(); if(dynamic_cast<const StringExpr*>(e))return Type::string();
         if(auto*v=dynamic_cast<const VarExpr*>(e))return types.at(v->name); if(auto*u=dynamic_cast<const UnaryExpr*>(e)){auto t=typeOf(u->rhs.get());if(u->op==TokenKind::Ampersand)return Type::ptr(t);if(u->op==TokenKind::Star)return *t.pointee;return t;}
-        if(auto*b=dynamic_cast<const BinaryExpr*>(e)){switch(b->op){case TokenKind::EqualEqual:case TokenKind::BangEqual:case TokenKind::Less:case TokenKind::LessEqual:case TokenKind::Greater:case TokenKind::GreaterEqual:case TokenKind::AndAnd:case TokenKind::OrOr:return Type::boolean();default:return typeOf(b->lhs.get());}}
+        if(auto*b=dynamic_cast<const BinaryExpr*>(e)){
+            auto l=typeOf(b->lhs.get());
+            switch(b->op){
+                case TokenKind::EqualEqual:
+                case TokenKind::BangEqual:
+                case TokenKind::Less:
+                case TokenKind::LessEqual:
+                case TokenKind::Greater:
+                case TokenKind::GreaterEqual:
+                case TokenKind::AndAnd:
+                case TokenKind::OrOr:
+                    return Type::boolean();
+                default:
+                    return l;
+            }
+        }
         if(auto*c=dynamic_cast<const CallExpr*>(e)){if(c->callee=="print")return Type::void_();return functions.at(c->callee)->ret;}
         if(auto*m=dynamic_cast<const MemberExpr*>(e)){auto t=typeOf(m->object.get());return getStruct(t.name).fields[fieldIndex(getStruct(t.name),m->member)].type;}
         if(auto*s=dynamic_cast<const StructInitExpr*>(e))return Type::named(s->typeName);
@@ -44,7 +59,70 @@ public:
         if(auto*m=dynamic_cast<const MemberExpr*>(e))return memberLoad(m);
         if(auto*s=dynamic_cast<const StructInitExpr*>(e)){const auto&st=getStruct(s->typeName);std::string cur="undef";Type stt=Type::named(s->typeName);for(std::size_t i=0;i<st.fields.size();++i){auto it=std::find_if(s->fields.begin(),s->fields.end(),[&](const auto&x){return x.first==st.fields[i].name;});if(it==s->fields.end())throw std::runtime_error("missing struct field");auto v=expr(it->second.get());auto r=next();emit(r+" = insertvalue "+llvmType(stt)+" "+cur+", "+llvmType(st.fields[i].type)+" "+v+", "+std::to_string(i));cur=r;}return cur;}
         if(auto*u=dynamic_cast<const UnaryExpr*>(e)){auto a=expr(u->rhs.get());auto t=typeOf(u->rhs.get());auto r=next();if(u->op==TokenKind::Minus){if(t.kind==TypeKind::I64)emit(r+" = sub i64 0, "+a);else emit(r+" = fneg double "+a);return r;}if(u->op==TokenKind::Bang){emit(r+" = xor i1 "+a+", true");return r;}if(u->op==TokenKind::Ampersand)return addressOf(u->rhs.get());if(u->op==TokenKind::Star){emit(r+" = load "+llvmType(*t.pointee)+", ptr "+a);return r;}}
-        if(auto*b=dynamic_cast<const BinaryExpr*>(e)){auto l=expr(b->lhs.get()),rv=expr(b->rhs.get()),r=next();auto t=typeOf(b->lhs.get());if(t.kind==TypeKind::F64){switch(b->op){case TokenKind::Plus:emit(r+" = fadd double "+l+", "+rv);break;case TokenKind::Minus:emit(r+" = fsub double "+l+", "+rv);break;case TokenKind::Star:emit(r+" = fmul double "+l+", "+rv);break;case TokenKind::Slash:emit(r+" = fdiv double "+l+", "+rv);break;case TokenKind::EqualEqual:emit(r+" = fcmp oeq double "+l+", "+rv);break;case TokenKind::BangEqual:emit(r+" = fcmp one double "+l+", "+rv);break;case TokenKind::Less:emit(r+" = fcmp olt double "+l+", "+rv);break;case TokenKind::LessEqual:emit(r+" = fcmp ole double "+l+", "+rv);break;case TokenKind::Greater:emit(r+" = fcmp ogt double "+l+", "+rv);break;case TokenKind::GreaterEqual:emit(r+" = fcmp oge double "+l+", "+rv);break;default:throw std::runtime_error("unsupported float operator");}return r;}if(t.kind==TypeKind::Bool){if(b->op==TokenKind::AndAnd)emit(r+" = and i1 "+l+", "+rv);else if(b->op==TokenKind::OrOr)emit(r+" = or i1 "+l+", "+rv);else if(b->op==TokenKind::EqualEqual)emit(r+" = icmp eq i1 "+l+", "+rv);else if(b->op==TokenKind::BangEqual)emit(r+" = icmp ne i1 "+l+", "+rv);else throw std::runtime_error("unsupported bool operator");return r;}switch(b->op){case TokenKind::Plus:emit(r+" = add i64 "+l+", "+rv);break;case TokenKind::Minus:emit(r+" = sub i64 "+l+", "+rv);break;case TokenKind::Star:emit(r+" = mul i64 "+l+", "+rv);break;case TokenKind::Slash:emit(r+" = sdiv i64 "+l+", "+rv);break;case TokenKind::Percent:emit(r+" = srem i64 "+l+", "+rv);break;case TokenKind::EqualEqual:emit(r+" = icmp eq i64 "+l+", "+rv);break;case TokenKind::BangEqual:emit(r+" = icmp ne i64 "+l+", "+rv);break;case TokenKind::Less:emit(r+" = icmp slt i64 "+l+", "+rv);break;case TokenKind::LessEqual:emit(r+" = icmp sle i64 "+l+", "+rv);break;case TokenKind::Greater:emit(r+" = icmp sgt i64 "+l+", "+rv);break;case TokenKind::GreaterEqual:emit(r+" = icmp sge i64 "+l+", "+rv);break;default:throw std::runtime_error("unsupported integer operator");}return r;}
+        if(auto*b=dynamic_cast<const BinaryExpr*>(e)){
+            auto l=expr(b->lhs.get()), rv=expr(b->rhs.get());
+            auto t=typeOf(b->lhs.get());
+            if(t.kind==TypeKind::String){
+                if(b->op==TokenKind::Plus){
+                    auto r=next();
+                    emit(r+" = call ptr @nexus_str_concat(ptr "+l+", ptr "+rv+")");
+                    return r;
+                }
+                if(b->op==TokenKind::EqualEqual){
+                    auto r=next();
+                    emit(r+" = call i1 @nexus_str_equal(ptr "+l+", ptr "+rv+")");
+                    return r;
+                }
+                if(b->op==TokenKind::BangEqual){
+                    auto eq=next();
+                    auto r=next();
+                    emit(eq+" = call i1 @nexus_str_equal(ptr "+l+", ptr "+rv+")");
+                    emit(r+" = xor i1 "+eq+", true");
+                    return r;
+                }
+                throw std::runtime_error("unsupported string operator");
+            }
+            auto r=next();
+            if(t.kind==TypeKind::F64){
+                switch(b->op){
+                    case TokenKind::Plus: emit(r+" = fadd double "+l+", "+rv); break;
+                    case TokenKind::Minus: emit(r+" = fsub double "+l+", "+rv); break;
+                    case TokenKind::Star: emit(r+" = fmul double "+l+", "+rv); break;
+                    case TokenKind::Slash: emit(r+" = fdiv double "+l+", "+rv); break;
+                    case TokenKind::EqualEqual: emit(r+" = fcmp oeq double "+l+", "+rv); break;
+                    case TokenKind::BangEqual: emit(r+" = fcmp one double "+l+", "+rv); break;
+                    case TokenKind::Less: emit(r+" = fcmp olt double "+l+", "+rv); break;
+                    case TokenKind::LessEqual: emit(r+" = fcmp ole double "+l+", "+rv); break;
+                    case TokenKind::Greater: emit(r+" = fcmp ogt double "+l+", "+rv); break;
+                    case TokenKind::GreaterEqual: emit(r+" = fcmp oge double "+l+", "+rv); break;
+                    default: throw std::runtime_error("unsupported float operator");
+                }
+                return r;
+            }
+            if(t.kind==TypeKind::Bool){
+                if(b->op==TokenKind::AndAnd) emit(r+" = and i1 "+l+", "+rv);
+                else if(b->op==TokenKind::OrOr) emit(r+" = or i1 "+l+", "+rv);
+                else if(b->op==TokenKind::EqualEqual) emit(r+" = icmp eq i1 "+l+", "+rv);
+                else if(b->op==TokenKind::BangEqual) emit(r+" = icmp ne i1 "+l+", "+rv);
+                else throw std::runtime_error("unsupported bool operator");
+                return r;
+            }
+            switch(b->op){
+                case TokenKind::Plus: emit(r+" = add i64 "+l+", "+rv); break;
+                case TokenKind::Minus: emit(r+" = sub i64 "+l+", "+rv); break;
+                case TokenKind::Star: emit(r+" = mul i64 "+l+", "+rv); break;
+                case TokenKind::Slash: emit(r+" = sdiv i64 "+l+", "+rv); break;
+                case TokenKind::Percent: emit(r+" = srem i64 "+l+", "+rv); break;
+                case TokenKind::EqualEqual: emit(r+" = icmp eq i64 "+l+", "+rv); break;
+                case TokenKind::BangEqual: emit(r+" = icmp ne i64 "+l+", "+rv); break;
+                case TokenKind::Less: emit(r+" = icmp slt i64 "+l+", "+rv); break;
+                case TokenKind::LessEqual: emit(r+" = icmp sle i64 "+l+", "+rv); break;
+                case TokenKind::Greater: emit(r+" = icmp sgt i64 "+l+", "+rv); break;
+                case TokenKind::GreaterEqual: emit(r+" = icmp sge i64 "+l+", "+rv); break;
+                default: throw std::runtime_error("unsupported integer operator");
+            }
+            return r;
+        }
         if(auto*c=dynamic_cast<const CallExpr*>(e)){auto it=functions.find(c->callee);if(c->callee=="print"){auto av=expr(c->args[0].get());auto t=typeOf(c->args[0].get());if(t.kind==TypeKind::I64)emit("call void @nexus_print_i64(i64 "+av+")");else if(t.kind==TypeKind::F64)emit("call void @nexus_print_f64(double "+av+")");else if(t.kind==TypeKind::Bool)emit("call void @nexus_print_bool(i1 "+av+")");else if(t.kind==TypeKind::String)emit("call void @nexus_print_str(ptr "+av+")");return "0";}if(it==functions.end())throw std::runtime_error("unknown function in codegen: "+c->callee);auto*fn=it->second;std::ostringstream call;call<<"call "<<llvmType(fn->ret)<<" @"<<fn->name<<"(";for(size_t i=0;i<c->args.size();++i){if(i)call<<", ";auto av=expr(c->args[i].get());call<<llvmType(fn->params[i].type)<<" "<<av;}call<<")";if(fn->ret.kind==TypeKind::Void){emit(call.str());return "0";}auto r=next();emit(r+" = "+call.str());return r;}
         throw std::runtime_error("unsupported expression in codegen");
     }
@@ -63,9 +141,9 @@ public:
     }
     std::string generate(const Program&p){
         for(auto&s:const_cast<Program&>(p).structs)structs[s.name]=&s;for(auto&f:const_cast<Program&>(p).functions)functions[f.name]=&f;
-        emitModule("; Nexus LLVM IR v0.2.0");if(!options.targetTriple.empty())emitModule("target triple = \""+options.targetTriple+"\"");
+        emitModule("; Nexus LLVM IR v0.2.1");if(!options.targetTriple.empty())emitModule("target triple = \""+options.targetTriple+"\"");
         for(auto&s:p.structs){std::ostringstream t;t<<"%struct."<<s.name<<" = type { ";for(size_t i=0;i<s.fields.size();++i){if(i)t<<", ";t<<llvmType(s.fields[i].type);}t<<" }";emitModule(t.str());}
-        emitModule("declare void @nexus_print_i64(i64)");emitModule("declare void @nexus_print_f64(double)");emitModule("declare void @nexus_print_bool(i1)");emitModule("declare void @nexus_print_str(ptr)");
+        emitModule("declare void @nexus_print_i64(i64)");emitModule("declare void @nexus_print_f64(double)");emitModule("declare void @nexus_print_bool(i1)");emitModule("declare void @nexus_print_str(ptr)");emitModule("declare ptr @nexus_str_concat(ptr, ptr)");emitModule("declare i1 @nexus_str_equal(ptr, ptr)");
         for(auto&f:const_cast<Program&>(p).functions){if(f.external){std::ostringstream s;s<<"declare "<<llvmType(f.ret)<<" @"<<f.name<<"(";for(size_t i=0;i<f.params.size();++i){if(i)s<<", ";s<<llvmType(f.params[i].type);}s<<")";emitModule(s.str());continue;}
             vars.clear();types.clear();reg=0;label=0;terminated=false;breakLabels.clear();continueLabels.clear();body.str("");body.clear();Type codegenRet=f.ret;if(f.name=="main"&&codegenRet.kind==TypeKind::Void)codegenRet=Type::i64();std::ostringstream sig;sig<<"define "<<llvmType(codegenRet)<<" @"<<f.name<<"(";for(size_t i=0;i<f.params.size();++i){if(i)sig<<", ";sig<<llvmType(f.params[i].type)<<" %arg"<<i;}sig<<") {";emit(sig.str());emit("entry:");for(size_t i=0;i<f.params.size();++i){auto ptr=next();vars[f.params[i].name]=ptr;types[f.params[i].name]=f.params[i].type;emit(ptr+" = alloca "+llvmType(f.params[i].type));emit("store "+llvmType(f.params[i].type)+" %arg"+std::to_string(i)+", ptr "+ptr);}for(auto&s:f.body->statements)stmt(s.get(),codegenRet);if(!terminated){if(codegenRet.kind==TypeKind::Void)emit("ret void");else if(f.name=="main")emit("ret "+llvmType(codegenRet)+" 0");else throw std::runtime_error("function may fall through without return: "+f.name);}emit("}");functionsIR<<body.str();}
         std::ostringstream result;result<<module.str();for(auto&g:globals)result<<g<<'\n';result<<functionsIR.str();return result.str();

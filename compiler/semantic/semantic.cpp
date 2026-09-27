@@ -15,7 +15,38 @@ Type SemanticAnalyzer::expr(Expr* e,std::unordered_map<std::string,Symbol>& env)
     if(dynamic_cast<IntExpr*>(e))return Type::i64(); if(dynamic_cast<FloatExpr*>(e))return Type::f64(); if(dynamic_cast<BoolExpr*>(e))return Type::boolean(); if(dynamic_cast<StringExpr*>(e))return Type::string();
     if(auto*v=dynamic_cast<VarExpr*>(e)){auto it=env.find(v->name);if(it==env.end())throw std::runtime_error("unknown variable: "+v->name);return it->second.type;}
     if(auto*u=dynamic_cast<UnaryExpr*>(e)){auto t=expr(u->rhs.get(),env);if(u->op==TokenKind::Minus&&(t.kind!=TypeKind::I64&&t.kind!=TypeKind::F64))throw std::runtime_error("unary '-' requires number");if(u->op==TokenKind::Bang&&t.kind!=TypeKind::Bool)throw std::runtime_error("'!' requires bool");if(u->op==TokenKind::Ampersand){if(auto*v=dynamic_cast<VarExpr*>(u->rhs.get())){auto it=env.find(v->name);if(it==env.end())throw std::runtime_error("unknown variable: "+v->name);}else if(!dynamic_cast<MemberExpr*>(u->rhs.get()))throw std::runtime_error("'&' requires a variable or field");return Type::ptr(t);}if(u->op==TokenKind::Star){if(t.kind!=TypeKind::Pointer||!t.pointee)throw std::runtime_error("'*' requires pointer");return *t.pointee;}return t;}
-    if(auto*b=dynamic_cast<BinaryExpr*>(e)){auto l=expr(b->lhs.get(),env),r=expr(b->rhs.get(),env);if(!sameType(l,r))throw std::runtime_error("binary operands have different types");switch(b->op){case TokenKind::Plus:case TokenKind::Minus:case TokenKind::Star:case TokenKind::Slash:case TokenKind::Percent:if(l.kind!=TypeKind::I64&&l.kind!=TypeKind::F64)throw std::runtime_error("arithmetic requires numeric types");return l;case TokenKind::EqualEqual:case TokenKind::BangEqual:case TokenKind::Less:case TokenKind::LessEqual:case TokenKind::Greater:case TokenKind::GreaterEqual:return Type::boolean();case TokenKind::AndAnd:case TokenKind::OrOr:if(l.kind!=TypeKind::Bool)throw std::runtime_error("logical operators require bool");return Type::boolean();default:break;}}
+    if(auto*b=dynamic_cast<BinaryExpr*>(e)){
+        auto l=expr(b->lhs.get(),env), r=expr(b->rhs.get(),env);
+        if(!sameType(l,r)) throw std::runtime_error("binary operands have different types");
+        switch(b->op){
+            case TokenKind::Plus:
+                if(l.kind==TypeKind::String || l.kind==TypeKind::I64 || l.kind==TypeKind::F64) return l;
+                throw std::runtime_error("operator + requires numbers or strings");
+            case TokenKind::Minus:
+            case TokenKind::Star:
+            case TokenKind::Slash:
+            case TokenKind::Percent:
+                if(l.kind!=TypeKind::I64 && l.kind!=TypeKind::F64) throw std::runtime_error("arithmetic requires numeric types");
+                return l;
+            case TokenKind::EqualEqual:
+            case TokenKind::BangEqual:
+                if(l.kind==TypeKind::String || l.kind==TypeKind::I64 || l.kind==TypeKind::F64 || l.kind==TypeKind::Bool) return Type::boolean();
+                throw std::runtime_error("equality is unsupported for this type");
+            case TokenKind::Less:
+            case TokenKind::LessEqual:
+            case TokenKind::Greater:
+            case TokenKind::GreaterEqual:
+                if(l.kind==TypeKind::String) throw std::runtime_error("string ordering is not supported; use == or !=");
+                if(l.kind==TypeKind::I64 || l.kind==TypeKind::F64) return Type::boolean();
+                throw std::runtime_error("comparison requires numeric types");
+            case TokenKind::AndAnd:
+            case TokenKind::OrOr:
+                if(l.kind!=TypeKind::Bool) throw std::runtime_error("logical operators require bool");
+                return Type::boolean();
+            default:
+                break;
+        }
+    }
     if(auto*c=dynamic_cast<CallExpr*>(e)){if(c->callee=="print"){if(c->args.size()!=1)throw std::runtime_error("print expects one argument");auto t=expr(c->args[0].get(),env);if(t.kind!=TypeKind::I64&&t.kind!=TypeKind::F64&&t.kind!=TypeKind::Bool&&t.kind!=TypeKind::String)throw std::runtime_error("print: unsupported type");return Type::void_();}auto it=funcs_.find(c->callee);if(it==funcs_.end())throw std::runtime_error("unknown function: "+c->callee);auto*f=it->second;if(f->params.size()!=c->args.size())throw std::runtime_error("wrong argument count for "+c->callee);for(size_t i=0;i<c->args.size();++i)if(!sameType(expr(c->args[i].get(),env),f->params[i].type))throw std::runtime_error("argument type mismatch in "+c->callee);return f->ret;}
     if(auto*m=dynamic_cast<MemberExpr*>(e)){auto t=expr(m->object.get(),env);if(t.kind!=TypeKind::Struct)throw std::runtime_error("member access requires struct");auto& s=getStruct(t.name);auto*f=fieldOf(s,m->member);if(!f)throw std::runtime_error("unknown field '"+m->member+"' on "+t.name);return f->type;}
     if(auto*si=dynamic_cast<StructInitExpr*>(e)){auto&s=getStruct(si->typeName);if(si->fields.size()!=s.fields.size())throw std::runtime_error("wrong number of fields for "+si->typeName);for(auto&[name,x]:si->fields){auto*f=fieldOf(s,name);if(!f)throw std::runtime_error("unknown field '"+name+"'");if(!sameType(expr(x.get(),env),f->type))throw std::runtime_error("field type mismatch for "+name);}return Type::named(si->typeName);}
