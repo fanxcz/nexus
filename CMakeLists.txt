@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(nexus VERSION 0.8.1 LANGUAGES CXX C)
+project(nexus VERSION 0.9.0 LANGUAGES CXX C)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -19,6 +19,7 @@ set(NEXUS_SOURCES
 add_executable(nexus ${NEXUS_SOURCES})
 target_include_directories(nexus PRIVATE compiler)
 target_compile_features(nexus PRIVATE cxx_std_20)
+target_compile_definitions(nexus PRIVATE NEXUS_SOURCE_ROOT="${CMAKE_SOURCE_DIR}")
 
 
 if (MSVC)
@@ -33,6 +34,7 @@ install(TARGETS nexus RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
 install(FILES runtime/runtime.cpp DESTINATION ${CMAKE_INSTALL_DATADIR}/nexus/runtime)
 install(DIRECTORY std/ DESTINATION ${CMAKE_INSTALL_DATADIR}/nexus/std OPTIONAL)
 install(DIRECTORY templates/ DESTINATION ${CMAKE_INSTALL_DATADIR}/nexus/templates OPTIONAL)
+install(DIRECTORY examples/assets/ DESTINATION ${CMAKE_INSTALL_DATADIR}/nexus/assets OPTIONAL)
 
 if (NEXUS_BUILD_TESTS)
   enable_testing()
@@ -46,6 +48,7 @@ if (NEXUS_BUILD_TESTS)
   )
   target_include_directories(nexus_tests PRIVATE compiler)
   target_compile_features(nexus_tests PRIVATE cxx_std_20)
+  target_compile_definitions(nexus_tests PRIVATE NEXUS_SOURCE_ROOT="${CMAKE_SOURCE_DIR}")
   target_compile_definitions(nexus_tests PRIVATE NEXUS_INSTALL_RUNTIME_DIR="${CMAKE_INSTALL_FULL_DATADIR}/nexus/runtime")
   if (MSVC)
     target_compile_options(nexus_tests PRIVATE /W4 /permissive-)
@@ -53,4 +56,8 @@ if (NEXUS_BUILD_TESTS)
     target_compile_options(nexus_tests PRIVATE -Wall -Wextra -Wpedantic -Wconversion -Wno-misleading-indentation -Wno-shadow)
   endif()
   add_test(NAME nexus_tests COMMAND nexus_tests)
+  add_test(NAME nexus_project_smoke
+      COMMAND ${CMAKE_COMMAND}
+          -DNEXUS_BIN=$<TARGET_FILE:nexus>
+          -P ${CMAKE_SOURCE_DIR}/tests/project_smoke.cmake)
 endif()

@@ -1,5 +1,75 @@
 # NEXUS
 
+## v0.9.0 — Real Project Workflow
+
+NEXUS now treats a directory as a real project instead of requiring every command to name a `.nx` file.
+
+New project tooling:
+- `nexus new MyGame --template game` creates a complete project tree with `src/`, `assets/`, `scenes/`, and `nexus.toml`
+- `nexus build` / `nexus run` / `nexus check` work without a source-file argument from inside a project
+- `nexus info` prints manifest, target, entry, artifact and window configuration
+- `nexus assets` inventories project assets and scenes
+- `nexus clean` removes build output
+- `nexus doctor` checks the native toolchain and runtime
+- release builds go to `build/release/<artifact>`; debug builds go to `build/debug/<artifact>`
+- installed NEXUS copies templates and starter assets with the compiler
+
+Project layout:
+
+```text
+MyGame/
+├── nexus.toml
+├── src/
+│   └── main.nx
+├── assets/
+│   ├── textures/
+│   ├── audio/
+│   ├── models/
+│   └── fonts/
+├── scenes/
+│   └── main.nxs
+└── build/
+```
+
+Example manifest:
+
+```toml
+[package]
+name = "MyGame"
+version = "0.9.0"
+edition = "2026"
+
+[build]
+entry = "src/main.nx"
+artifact = "MyGame"
+target = "native"
+
+[window]
+width = 1280
+height = 720
+title = "MyGame"
+
+[assets]
+textures = "assets/textures"
+audio = "assets/audio"
+models = "assets/models"
+fonts = "assets/fonts"
+scenes = "scenes"
+```
+
+## Quick start
+
+```bash
+nexus new NeonGame --template game
+cd NeonGame
+nexus info
+nexus assets
+nexus check
+nexus build
+nexus run
+```
+
+
 ## v0.8.1 — Normal Game Template and Reliable Audio
 
 - `neon_survivor.nx`: centered playable top-down shooter

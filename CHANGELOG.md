@@ -1,3 +1,18 @@
+## v0.9.0
+
+- real project workflow built around `nexus.toml`
+- parent-directory project discovery for `build`, `run`, and `check`
+- project-aware output directories: `build/debug` and `build/release`
+- manifest fields for package, entry, artifact, target and window metadata
+- `nexus info`
+- `nexus assets`
+- `nexus clean`
+- `nexus doctor`
+- `nexus init --template ...`
+- installed compiler now ships templates and starter assets
+- game/app/3D/CLI templates are first-class files
+- starter projects include textures, audio, model and scene directories
+
 ## v0.8.1
 
 - Replaced the demo game template with a centered playable top-down shooter.
