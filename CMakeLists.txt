@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(nexus VERSION 1.0.0 LANGUAGES CXX C)
+project(nexus VERSION 1.1.0 LANGUAGES CXX C)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -60,4 +60,8 @@ if (NEXUS_BUILD_TESTS)
       COMMAND ${CMAKE_COMMAND}
           -DNEXUS_BIN=$<TARGET_FILE:nexus>
           -P ${CMAKE_SOURCE_DIR}/tests/project_smoke.cmake)
+  add_test(NAME nexus_paint_smoke
+      COMMAND ${CMAKE_COMMAND}
+          -DNEXUS_BIN=$<TARGET_FILE:nexus>
+          -P ${CMAKE_SOURCE_DIR}/tests/paint_smoke.cmake)
 endif()

@@ -1,18 +1,16 @@
 # Changelog
 
-## 1.0.0
+## 1.1.0 - Graphics backend rewrite
 
-- Promoted the release line to NEXUS 1.0.0.
-- Added `const`, range `for`, and compound assignments.
-- Added standard modules for IO, filesystem, HTTP, JSON, SQLite, memory, and SHA-256.
-- Added runtime memory, HTTP, JSON, SQLite and hashing helpers.
-- Added `fmt`, `lint`, `doc`, `bench`, `test`, `editor`, `lsp` commands.
-- Added local vendoring package workflow with lockfile and `.nxpkg` publishing.
-- Added installed-toolchain validation for runtime, stdlib and templates.
-- Added project smoke coverage for the v1 language constructs and tooling.
-- Updated CI for Linux, Windows and macOS host builds.
-- Kept graphics/audio/game runtime from the 0.9 line.
+- SDL2 2D renderer is now the default for windowed applications and Nexus Paint.
+- 2D rendering no longer depends on an OpenGL compatibility profile.
+- Canvas creation/destruction is backend-safe.
+- Resize, maximize and fullscreen APIs are exposed to Nexus.
+- Virtual UI coordinates remain stable across window sizes.
+- `gfx_backend()` reports the active renderer.
+- Runtime graphics code is organized into explicit 2D, 3D, canvas, input and window sections.
+- OpenGL is activated only when a 3D frame is requested.
+- `ctest` and native graphics smoke tests are part of the release validation.
+- `usize`/`isize` aliases map to the platform integer width supported by the current backend.
+- Added low-level `mem_set` and `mem_copy` runtime operations alongside `mem_alloc`/`mem_free`.
 
-## 0.9.0
-
-- Real project format and project-aware CLI workflow.

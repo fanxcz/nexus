@@ -21,7 +21,7 @@ execute_process(
   OUTPUT_VARIABLE out
   ERROR_VARIABLE err
 )
-if(NOT rc EQUAL 0 OR NOT out MATCHES "version: 1[.]0[.]0")
+if(NOT rc EQUAL 0 OR NOT out MATCHES "version: 1[.]1[.]0")
   message(FATAL_ERROR "nexus info failed: ${out}\n${err}")
 endif()
 

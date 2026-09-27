@@ -1,4 +1,4 @@
-# NEXUS 1.0.0
+# NEXUS 1.1.0
 
 NEXUS is a native, cross-platform programming language and application/game runtime. The compiler is developed on Debian 13 with C++20 and emits LLVM IR/native binaries through Clang/LLVM.
 
@@ -56,6 +56,38 @@ nexus pkg build
 nexus pkg publish
 ```
 
-## Important limits in 1.0.0
+## Important limits in 1.1.0
 
 The runtime/tooling foundation is production-oriented, but some advanced language features remain experimental or are still being designed: full generic monomorphization, trait dispatch, closures/async lowering, a full visual scene editor, and a complete JSON AST/HTTP server stack. They are isolated behind stable interfaces so they can be added without redesigning the project format.
+
+## Nexus Paint
+
+NEXUS includes a native editable raster canvas example and project template:
+
+```bash
+nexus new NexusPaint --template paint
+cd NexusPaint
+nexus build --release
+nexus run
+```
+
+The Paint template supports a 1024x720 canvas, pencil, eraser, line, rectangle, flood fill, color palette, brush size, undo/redo, and BMP save/load.
+
+## Graphics backend (1.1.0)
+
+Nexus 2D applications use the SDL2 renderer by default. This keeps windowed,
+maximized and fullscreen layouts independent from an OpenGL compatibility
+profile. OpenGL is enabled lazily when a 3D frame is requested.
+
+Useful window controls:
+
+```nx
+gfx_fullscreen(true)
+gfx_fullscreen(false)
+gfx_maximize()
+gfx_restore()
+print(gfx_backend())
+```
+
+Applications can use a stable virtual UI space with `gfx_set_ui_resolution()`;
+mouse coordinates are converted into the same logical coordinate system.
