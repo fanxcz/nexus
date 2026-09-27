@@ -2,7 +2,36 @@
 
 NEXUS is a universal programming language with a C++20 compiler, LLVM-compatible native code generation, and a growing cross-platform runtime. The compiler is developed on Debian 13, while the language frontend is designed to stay platform-independent.
 
-## v0.5.1 — Native 2D/3D Graphics & Audio Runtime
+## v0.7.0 — Native Game/App Runtime + Reliable Audio
+
+### Audio that does not require SDL2_mixer
+
+NEXUS now parses standard PCM WAV files itself and queues them through the core SDL2 audio device. This avoids relying on the optional `SDL_LoadWAV` or SDL2_mixer symbols that may not be exported by the installed SDL2 runtime.
+
+Example:
+
+```nx
+let sound = gfx_sound_load("examples/assets/beep.wav")
+if sound == 0 {
+    print(gfx_audio_error())
+    return
+}
+gfx_sound_volume(1.0)
+gfx_sound_play(sound, false)
+sleep(400)
+gfx_sound_stop()
+```
+
+For MP3/OGG music, SDL2_mixer remains an optional backend. WAV always uses the core NEXUS audio path.
+
+### v0.7 features
+
+- reliable PCM WAV audio on Debian/Linux without SDL2_mixer
+- audio availability and error reporting
+- sound volume and queued-audio state
+- lightweight OBJ model loading/drawing
+- particle creation, update, draw and lifetime control
+- existing SDL2/OpenGL 2D/3D, textures, fonts, UI and ECS APIs remain available
 
 NEXUS now has a native windowed runtime for real interactive programs and games. The generated executable loads SDL2 dynamically and uses an OpenGL 2.1 compatibility backend for portable 2D/3D rendering.
 
@@ -27,8 +56,6 @@ Working now:
 - native 3D example
 
 The runtime deliberately avoids compile-time SDL headers. Generated applications dynamically load SDL2, which keeps the NEXUS compiler itself independent from SDL2 development headers.
-
-On Debian 13, the SDL2 runtime package is `libsdl2-2.0-0`; the Debian package repository currently lists it as a stable trixie package. citeturn125366search0turn125366search3
 
 ## Existing language features
 
@@ -58,7 +85,39 @@ Still experimental / planned:
 - LSP
 - full async runtime
 - verified native cross-compilation toolchains for every advertised target
-- advanced PNG/JPEG texture import, sprite atlases, GPU shader API, animation system, GUI widgets, and full package/dependency registry
+
+
+### v0.6 runtime additions
+
+NEXUS 0.6 expands the native runtime into a small game/application framework:
+
+- optional PNG/JPG loading through SDL2_image with BMP fallback
+- optional TrueType font loading/rendering through SDL2_ttf
+- optional music playback through SDL2_mixer (WAV sound effects remain in core SDL2 audio)
+- 2D camera position/zoom
+- sprite-sheet frame drawing
+- cursor visibility control
+- immediate-mode UI helpers: buttons, panels, labels and progress bars
+- lightweight ECS runtime with entities, transform, velocity, size, color, texture, update, draw and AABB collision
+- runtime asset/backend capability reporting
+
+Optional Debian runtime packages for these media features are typically:
+
+```bash
+sudo apt install libsdl2-image-2.0-0 libsdl2-ttf-2.0-0 libsdl2-mixer-2.0-0
+```
+
+The compiler does not link against these packages at build time; the generated application loads the libraries dynamically when the corresponding feature is used.
+
+### Ultimate showcase
+
+```bash
+./build/nexus check examples/ultimate_showcase.nx
+./build/nexus build examples/ultimate_showcase.nx -o nexus-ultimate
+./nexus-ultimate
+```
+
+The showcase exercises the v0.6 runtime in one program: ECS entities, movement, collision, UI, camera, sprite-sheet drawing, TTF text, music, mouse input, keyboard input and native window events.
 
 ## Build on Debian 13
 

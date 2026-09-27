@@ -11,6 +11,12 @@
 #include <array>
 #include <algorithm>
 #include <cctype>
+#include <memory>
+#include <fstream>
+#include <sstream>
+#include <mutex>
+#include <thread>
+#include <atomic>
 
 #if defined(_WIN32)
 #include <windows.h>
@@ -131,6 +137,10 @@ union SDL_Event {
     SDL_WindowEvent window;
 };
 
+struct SDL_Color { uint8_t r, g, b, a; };
+typedef struct TTF_Font TTF_Font;
+typedef struct Mix_Music Mix_Music;
+
 // SDL constants used by the runtime.
 constexpr uint32_t SDL_INIT_TIMER = 0x00000001u;
 constexpr uint32_t SDL_INIT_AUDIO = 0x00000010u;
@@ -219,6 +229,8 @@ GLPROC(glClear, void, (GLbitfield))
 GLPROC(glTranslatef, void, (GLfloat,GLfloat,GLfloat))
 GLPROC(glRotatef, void, (GLfloat,GLfloat,GLfloat,GLfloat))
 GLPROC(glScalef, void, (GLfloat,GLfloat,GLfloat))
+GLPROC(glPushMatrix, void, ())
+GLPROC(glPopMatrix, void, ())
 GLPROC(glLineWidth, void, (GLfloat))
 GLPROC(glPolygonMode, void, (GLenum,GLenum))
 #undef GLPROC
@@ -239,23 +251,62 @@ SDLPROC(SDL_GL_SetSwapInterval, int, (int))
 SDLPROC(SDL_PollEvent, int, (SDL_Event*))
 SDLPROC(SDL_GetKeyboardState, const uint8_t*, (int*))
 SDLPROC(SDL_GetMouseState, uint32_t, (int*,int*))
+SDLPROC(SDL_ShowCursor, int, (int))
 SDLPROC(SDL_LoadBMP, SDL_Surface*, (const char*))
 SDLPROC(SDL_ConvertSurfaceFormat, SDL_Surface*, (SDL_Surface*,uint32_t,uint32_t))
 SDLPROC(SDL_FreeSurface, void, (SDL_Surface*))
 SDLPROC(SDL_GetPerformanceCounter, uint64_t, ())
 SDLPROC(SDL_GetPerformanceFrequency, uint64_t, ())
-SDLPROC(SDL_LoadWAV, SDL_AudioSpec*, (const char*,SDL_AudioSpec*,uint8_t**,uint32_t*))
-SDLPROC(SDL_FreeWAV, void, (uint8_t*))
 SDLPROC(SDL_OpenAudioDevice, SDL_AudioDeviceID, (const char*,int,const SDL_AudioSpec*,SDL_AudioSpec*,int))
 SDLPROC(SDL_CloseAudioDevice, void, (SDL_AudioDeviceID))
 SDLPROC(SDL_PauseAudioDevice, void, (SDL_AudioDeviceID,int))
 SDLPROC(SDL_QueueAudio, int, (SDL_AudioDeviceID,const void*,uint32_t))
+SDLPROC(SDL_GetQueuedAudioSize, uint32_t, (SDL_AudioDeviceID))
+SDLPROC(SDL_ClearQueuedAudio, void, (SDL_AudioDeviceID))
 SDLPROC(SDL_GetNumAudioDevices, int, (int))
 #undef SDLPROC
+
+using PFN_IMG_Load = SDL_Surface* (*)(const char*);
+using PFN_IMG_GetError = const char* (*)();
+static PFN_IMG_Load IMG_Load = nullptr;
+static PFN_IMG_GetError IMG_GetError = nullptr;
+
+using PFN_TTF_Init = int (*)();
+using PFN_TTF_Quit = void (*)();
+using PFN_TTF_GetError = const char* (*)();
+using PFN_TTF_OpenFont = TTF_Font* (*)(const char*, int);
+using PFN_TTF_CloseFont = void (*)(TTF_Font*);
+using PFN_TTF_RenderUTF8_Blended = SDL_Surface* (*)(TTF_Font*, const char*, SDL_Color);
+static PFN_TTF_Init TTF_Init = nullptr;
+static PFN_TTF_Quit TTF_Quit = nullptr;
+static PFN_TTF_GetError TTF_GetError = nullptr;
+static PFN_TTF_OpenFont TTF_OpenFont = nullptr;
+static PFN_TTF_CloseFont TTF_CloseFont = nullptr;
+static PFN_TTF_RenderUTF8_Blended TTF_RenderUTF8_Blended = nullptr;
+
+using PFN_Mix_OpenAudio = int (*)(int, uint16_t, int, int);
+using PFN_Mix_CloseAudio = void (*)();
+using PFN_Mix_GetError = const char* (*)();
+using PFN_Mix_LoadMUS = Mix_Music* (*)(const char*);
+using PFN_Mix_FreeMusic = void (*)(Mix_Music*);
+using PFN_Mix_PlayMusic = int (*)(Mix_Music*, int);
+using PFN_Mix_HaltMusic = int (*)();
+using PFN_Mix_VolumeMusic = int (*)(int);
+static PFN_Mix_OpenAudio Mix_OpenAudio = nullptr;
+static PFN_Mix_CloseAudio Mix_CloseAudio = nullptr;
+static PFN_Mix_GetError Mix_GetError = nullptr;
+static PFN_Mix_LoadMUS Mix_LoadMUS = nullptr;
+static PFN_Mix_FreeMusic Mix_FreeMusic = nullptr;
+static PFN_Mix_PlayMusic Mix_PlayMusic = nullptr;
+static PFN_Mix_HaltMusic Mix_HaltMusic = nullptr;
+static PFN_Mix_VolumeMusic Mix_VolumeMusic = nullptr;
 
 using FnLoadLibrary = void* (*)(const char*);
 using FnGetProc = void* (*)(void*, const char*);
 static void* gSDL = nullptr;
+static void* gIMG = nullptr;
+static void* gTTF = nullptr;
+static void* gMIX = nullptr;
 static SDL_Window* gWindow = nullptr;
 static SDL_GLContext gGL = nullptr;
 static bool gGraphics = false;
@@ -273,13 +324,49 @@ static double gLastFrame = 0.0;
 static std::vector<uint8_t> gKeys(512, 0);
 static std::array<uint8_t, 8> gMouseButtons{};
 static SDL_AudioDeviceID gAudioDevice = 0;
+static SDL_AudioSpec gAudioSpec{};
+static int gAudioVolume = 128;
+static std::string gAudioError;
 
 struct Texture { GLuint id{}; int w{}; int h{}; };
-struct Sound { std::vector<uint8_t> data; int freq{}; uint16_t format{}; uint8_t channels{}; uint16_t samples{}; };
+struct Sound {
+    std::vector<uint8_t> data;
+    int freq{};
+    uint16_t format{};
+    uint8_t channels{};
+    uint16_t samples{};
+};
 static std::unordered_map<int64_t, Texture> gTextures;
 static std::unordered_map<int64_t, Sound> gSounds;
 static int64_t gNextTexture = 1;
 static int64_t gNextSound = 1;
+static float gCameraX = 0.0f, gCameraY = 0.0f, gCameraZoom = 1.0f;
+static std::unordered_map<int64_t, TTF_Font*> gFonts;
+static int64_t gNextFont = 1;
+static Mix_Music* gMusic = nullptr;
+static bool gTTFReady = false;
+static bool gMixerReady = false;
+static bool gMouseClicked = false;
+
+struct EcsEntity {
+    bool alive=true; float x=0, y=0, vx=0, vy=0, w=48, h=48;
+    float r=0.25f, g=0.75f, b=1.0f, a=1.0f; int64_t texture=0;
+};
+static std::unordered_map<int64_t, EcsEntity> gEntities;
+static int64_t gNextEntity = 1;
+
+struct Model3D {
+    std::vector<float> vertices; // xyz triples, triangle list
+};
+static std::unordered_map<int64_t, Model3D> gModels;
+static int64_t gNextModel = 1;
+
+struct Particle {
+    bool alive=true; float x=0,y=0,vx=0,vy=0,life=1,maxLife=1,size=6;
+    float r=1,g=1,b=1,a=1;
+};
+static std::unordered_map<int64_t, Particle> gParticles;
+static int64_t gNextParticle = 1;
 
 static void* load_library(const char* name) {
 #if defined(_WIN32)
@@ -296,6 +383,28 @@ static void* load_symbol(void* lib, const char* name) {
 #endif
 }
 static std::string sdl_error() { return gSDL && SDL_GetError ? SDL_GetError() : "SDL2 unavailable"; }
+static void* load_optional(const char* const* names, size_t count) { for(size_t i=0;i<count;++i){ if(void* h=load_library(names[i])) return h; } return nullptr; }
+static void load_optional_media_libs() {
+#if defined(_WIN32)
+    const char* imgNames[] = {"SDL2_image.dll", "SDL2_image-2.0.dll"};
+    const char* ttfNames[] = {"SDL2_ttf.dll", "SDL2_ttf-2.0.dll"};
+    const char* mixNames[] = {"SDL2_mixer.dll", "SDL2_mixer-2.0.dll"};
+#elif defined(__APPLE__)
+    const char* imgNames[] = {"libSDL2_image-2.0.0.dylib", "libSDL2_image.dylib"};
+    const char* ttfNames[] = {"libSDL2_ttf-2.0.0.dylib", "libSDL2_ttf.dylib"};
+    const char* mixNames[] = {"libSDL2_mixer-2.0.0.dylib", "libSDL2_mixer.dylib"};
+#else
+    const char* imgNames[] = {"libSDL2_image-2.0.so.0", "libSDL2_image.so", "libSDL2_image-2.0.so"};
+    const char* ttfNames[] = {"libSDL2_ttf-2.0.so.0", "libSDL2_ttf.so", "libSDL2_ttf-2.0.so"};
+    const char* mixNames[] = {"libSDL2_mixer-2.0.so.0", "libSDL2_mixer.so", "libSDL2_mixer-2.0.so"};
+#endif
+    if(!gIMG) gIMG=load_optional(imgNames, sizeof(imgNames)/sizeof(imgNames[0]));
+    if(gIMG && !IMG_Load){ IMG_Load=reinterpret_cast<PFN_IMG_Load>(load_symbol(gIMG,"IMG_Load")); IMG_GetError=reinterpret_cast<PFN_IMG_GetError>(load_symbol(gIMG,"IMG_GetError")); }
+    if(!gTTF) gTTF=load_optional(ttfNames, sizeof(ttfNames)/sizeof(ttfNames[0]));
+    if(gTTF && !TTF_Init){ TTF_Init=reinterpret_cast<PFN_TTF_Init>(load_symbol(gTTF,"TTF_Init")); TTF_Quit=reinterpret_cast<PFN_TTF_Quit>(load_symbol(gTTF,"TTF_Quit")); TTF_GetError=reinterpret_cast<PFN_TTF_GetError>(load_symbol(gTTF,"TTF_GetError")); TTF_OpenFont=reinterpret_cast<PFN_TTF_OpenFont>(load_symbol(gTTF,"TTF_OpenFont")); TTF_CloseFont=reinterpret_cast<PFN_TTF_CloseFont>(load_symbol(gTTF,"TTF_CloseFont")); TTF_RenderUTF8_Blended=reinterpret_cast<PFN_TTF_RenderUTF8_Blended>(load_symbol(gTTF,"TTF_RenderUTF8_Blended")); }
+    if(!gMIX) gMIX=load_optional(mixNames, sizeof(mixNames)/sizeof(mixNames[0]));
+    if(gMIX && !Mix_OpenAudio){ Mix_OpenAudio=reinterpret_cast<PFN_Mix_OpenAudio>(load_symbol(gMIX,"Mix_OpenAudio")); Mix_CloseAudio=reinterpret_cast<PFN_Mix_CloseAudio>(load_symbol(gMIX,"Mix_CloseAudio")); Mix_GetError=reinterpret_cast<PFN_Mix_GetError>(load_symbol(gMIX,"Mix_GetError")); Mix_LoadMUS=reinterpret_cast<PFN_Mix_LoadMUS>(load_symbol(gMIX,"Mix_LoadMUS")); Mix_FreeMusic=reinterpret_cast<PFN_Mix_FreeMusic>(load_symbol(gMIX,"Mix_FreeMusic")); Mix_PlayMusic=reinterpret_cast<PFN_Mix_PlayMusic>(load_symbol(gMIX,"Mix_PlayMusic")); Mix_HaltMusic=reinterpret_cast<PFN_Mix_HaltMusic>(load_symbol(gMIX,"Mix_HaltMusic")); Mix_VolumeMusic=reinterpret_cast<PFN_Mix_VolumeMusic>(load_symbol(gMIX,"Mix_VolumeMusic")); }
+}
 static bool load_sdl() {
     if(gSDL) return true;
 #if defined(_WIN32)
@@ -316,13 +425,14 @@ static bool load_sdl() {
     LOAD_REQUIRED_SDL(SDL_Init); LOAD_REQUIRED_SDL(SDL_Quit); LOAD_REQUIRED_SDL(SDL_GetError);
     LOAD_REQUIRED_SDL(SDL_CreateWindow); LOAD_REQUIRED_SDL(SDL_DestroyWindow); LOAD_REQUIRED_SDL(SDL_SetWindowTitle); LOAD_REQUIRED_SDL(SDL_GL_SetSwapInterval);
     LOAD_REQUIRED_SDL(SDL_GL_SetAttribute); LOAD_REQUIRED_SDL(SDL_GL_CreateContext); LOAD_REQUIRED_SDL(SDL_GL_DeleteContext); LOAD_REQUIRED_SDL(SDL_GL_SwapWindow); LOAD_REQUIRED_SDL(SDL_GL_GetProcAddress);
-    LOAD_REQUIRED_SDL(SDL_PollEvent); LOAD_REQUIRED_SDL(SDL_GetKeyboardState); LOAD_REQUIRED_SDL(SDL_GetMouseState);
+    LOAD_REQUIRED_SDL(SDL_PollEvent); LOAD_REQUIRED_SDL(SDL_GetKeyboardState); LOAD_REQUIRED_SDL(SDL_GetMouseState); LOAD_REQUIRED_SDL(SDL_ShowCursor);
     LOAD_REQUIRED_SDL(SDL_GetPerformanceCounter); LOAD_REQUIRED_SDL(SDL_GetPerformanceFrequency);
     LOAD_OPTIONAL_SDL(SDL_LoadBMP); LOAD_OPTIONAL_SDL(SDL_ConvertSurfaceFormat); LOAD_OPTIONAL_SDL(SDL_FreeSurface);
-    LOAD_OPTIONAL_SDL(SDL_LoadWAV); LOAD_OPTIONAL_SDL(SDL_FreeWAV); LOAD_OPTIONAL_SDL(SDL_OpenAudioDevice); LOAD_OPTIONAL_SDL(SDL_CloseAudioDevice); LOAD_OPTIONAL_SDL(SDL_PauseAudioDevice); LOAD_OPTIONAL_SDL(SDL_QueueAudio); LOAD_OPTIONAL_SDL(SDL_GetNumAudioDevices);
+    LOAD_OPTIONAL_SDL(SDL_OpenAudioDevice); LOAD_OPTIONAL_SDL(SDL_CloseAudioDevice); LOAD_OPTIONAL_SDL(SDL_PauseAudioDevice); LOAD_OPTIONAL_SDL(SDL_QueueAudio); LOAD_OPTIONAL_SDL(SDL_GetQueuedAudioSize); LOAD_OPTIONAL_SDL(SDL_ClearQueuedAudio); LOAD_OPTIONAL_SDL(SDL_GetNumAudioDevices);
 #undef LOAD_OPTIONAL_SDL
 #undef LOAD_REQUIRED_SDL
     if(!ok){ gGraphicsError = "SDL2 runtime is missing required video/window symbols"; gSDL=nullptr; return false; }
+    load_optional_media_libs();
     return true;
 }
 
@@ -332,7 +442,7 @@ static bool load_gl() {
     LOAD_GL(glViewport); LOAD_GL(glMatrixMode); LOAD_GL(glLoadIdentity); LOAD_GL(glOrtho); LOAD_GL(glFrustum);
     LOAD_GL(glBegin); LOAD_GL(glEnd); LOAD_GL(glColor4f); LOAD_GL(glVertex2f); LOAD_GL(glVertex3f); LOAD_GL(glTexCoord2f);
     LOAD_GL(glBindTexture); LOAD_GL(glGenTextures); LOAD_GL(glDeleteTextures); LOAD_GL(glTexParameteri); LOAD_GL(glTexImage2D);
-    LOAD_GL(glEnable); LOAD_GL(glDisable); LOAD_GL(glClearColor); LOAD_GL(glClear); LOAD_GL(glTranslatef); LOAD_GL(glRotatef); LOAD_GL(glScalef); LOAD_GL(glLineWidth); LOAD_GL(glPolygonMode);
+    LOAD_GL(glEnable); LOAD_GL(glDisable); LOAD_GL(glPushMatrix); LOAD_GL(glPopMatrix); LOAD_GL(glClearColor); LOAD_GL(glClear); LOAD_GL(glTranslatef); LOAD_GL(glRotatef); LOAD_GL(glScalef); LOAD_GL(glLineWidth); LOAD_GL(glPolygonMode);
 #undef LOAD_GL
     return true;
 }
@@ -353,6 +463,11 @@ static void setup_2d() {
     glDisable(GL_DEPTH_TEST); glEnable(GL_BLEND); if(glBlendFuncPtr) glBlendFuncPtr(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
     glMatrixMode(GL_PROJECTION); glLoadIdentity(); glOrtho(0, gWidth, gHeight, 0, -1, 1);
     glMatrixMode(GL_MODELVIEW); glLoadIdentity();
+    if(gCameraZoom!=1.0f || gCameraX!=0.0f || gCameraY!=0.0f) {
+        glTranslatef(float(gWidth)*0.5f, float(gHeight)*0.5f, 0);
+        glScalef(gCameraZoom, gCameraZoom, 1);
+        glTranslatef(-float(gWidth)*0.5f-gCameraX, -float(gHeight)*0.5f-gCameraY, 0);
+    }
 }
 
 static void draw_quad(float x,float y,float w,float h,float r,float g,float b,float a){
@@ -428,7 +543,7 @@ static int64_t scancode_for(const char* name){
     if(s=="SPACE")return 44; if(s=="ENTER")return 40; if(s=="ESC"||s=="ESCAPE")return 41; if(s=="LEFT")return 80; if(s=="RIGHT")return 79; if(s=="UP")return 82; if(s=="DOWN")return 81; if(s=="TAB")return 43; if(s=="SHIFT")return 225; if(s=="CTRL"||s=="CONTROL")return 224; return -1;
 }
 
-static void clear_event(){ gLastEvent=0; gLastKey=-1; gLastMouseButton=0; }
+static void clear_event(){ gLastEvent=0; gLastKey=-1; gLastMouseButton=0; gMouseClicked=false; }
 static void process_events(){
     if(!SDL_PollEvent) return; SDL_Event e{};
     clear_event();
@@ -438,10 +553,82 @@ static void process_events(){
         else if(e.type==SDL_KEYDOWN){gLastKey=int(e.key.keysym.scancode);if(gLastKey>=0&&gLastKey<int(gKeys.size()))gKeys[size_t(gLastKey)]=1;}
         else if(e.type==SDL_KEYUP){gLastKey=int(e.key.keysym.scancode);if(gLastKey>=0&&gLastKey<int(gKeys.size()))gKeys[size_t(gLastKey)]=0;}
         else if(e.type==SDL_MOUSEMOTION){gLastX=e.motion.x;gLastY=e.motion.y;}
-        else if(e.type==SDL_MOUSEBUTTONDOWN){gLastMouseButton=int(e.button.button);gLastX=e.button.x;gLastY=e.button.y;if(e.button.button<gMouseButtons.size())gMouseButtons[e.button.button]=1;}
+        else if(e.type==SDL_MOUSEBUTTONDOWN){gMouseClicked=true;gLastMouseButton=int(e.button.button);gLastX=e.button.x;gLastY=e.button.y;if(e.button.button<gMouseButtons.size())gMouseButtons[e.button.button]=1;}
         else if(e.type==SDL_MOUSEBUTTONUP){gLastMouseButton=int(e.button.button);gLastX=e.button.x;gLastY=e.button.y;if(e.button.button<gMouseButtons.size())gMouseButtons[e.button.button]=0;}
         else if(e.type==SDL_WINDOWEVENT){gLastX=e.window.data1;gLastY=e.window.data2;if(e.window.data1>0)gWidth=e.window.data1;if(e.window.data2>0)gHeight=e.window.data2;}
     }
+}
+
+
+static uint16_t rd16(const uint8_t* p) { return uint16_t(p[0]) | (uint16_t(p[1]) << 8); }
+static uint32_t rd32(const uint8_t* p) { return uint32_t(p[0]) | (uint32_t(p[1]) << 8) | (uint32_t(p[2]) << 16) | (uint32_t(p[3]) << 24); }
+static bool load_pcm_wav(const char* path, SDL_AudioSpec& spec, std::vector<uint8_t>& audio, std::string& err) {
+    std::FILE* f = std::fopen(path, "rb");
+    if(!f) { err = std::string("cannot open WAV: ") + path; return false; }
+    std::vector<uint8_t> bytes;
+    std::fseek(f, 0, SEEK_END);
+    long n = std::ftell(f);
+    std::rewind(f);
+    if(n <= 0) { std::fclose(f); err = "WAV file is empty"; return false; }
+    bytes.resize(size_t(n));
+    if(std::fread(bytes.data(), 1, bytes.size(), f) != bytes.size()) { std::fclose(f); err = "cannot read WAV"; return false; }
+    std::fclose(f);
+    if(bytes.size() < 12 || std::memcmp(bytes.data(), "RIFF", 4) != 0 || std::memcmp(bytes.data()+8, "WAVE", 4) != 0) { err = "not a RIFF/WAVE file"; return false; }
+    uint16_t audioFormat=0, channels=0, bits=0;
+    uint32_t sampleRate=0, dataOffset=0, dataSize=0;
+    size_t pos = 12;
+    while(pos + 8 <= bytes.size()) {
+        const uint8_t* h = bytes.data() + pos;
+        uint32_t chunkSize = rd32(h + 4);
+        size_t payload = pos + 8;
+        if(payload > bytes.size()) break;
+        size_t available = bytes.size() - payload;
+        size_t actual = std::min<size_t>(chunkSize, available);
+        if(std::memcmp(h, "fmt ", 4) == 0 && actual >= 16) {
+            const uint8_t* q = bytes.data() + payload;
+            audioFormat = rd16(q + 0);
+            channels = rd16(q + 2);
+            sampleRate = rd32(q + 4);
+            bits = rd16(q + 14);
+        } else if(std::memcmp(h, "data", 4) == 0) {
+            dataOffset = uint32_t(payload);
+            dataSize = uint32_t(actual);
+        }
+        pos = payload + actual + (actual & 1u);
+    }
+    if(audioFormat != 1) { err = "only PCM WAV is supported without SDL2_mixer"; return false; }
+    if(channels == 0 || channels > 2 || sampleRate == 0) { err = "unsupported WAV channel/sample-rate configuration"; return false; }
+    if(bits != 8 && bits != 16) { err = "only 8-bit or 16-bit PCM WAV is supported"; return false; }
+    if(dataSize == 0 || dataOffset + dataSize > bytes.size()) { err = "WAV data chunk is missing or invalid"; return false; }
+    spec = SDL_AudioSpec{};
+    spec.freq = int(sampleRate);
+    spec.channels = uint8_t(channels);
+    spec.samples = 4096;
+    spec.padding = 0;
+    spec.callback = nullptr;
+    spec.userdata = nullptr;
+    if(bits == 8) spec.format = 0x0008u; // AUDIO_U8
+    else spec.format = 0x8010u; // AUDIO_S16LSB
+    spec.size = dataSize;
+    audio.assign(bytes.begin() + dataOffset, bytes.begin() + dataOffset + dataSize);
+    return true;
+}
+
+static bool ensure_audio_device(const SDL_AudioSpec& wanted) {
+    if(gAudioDevice) return true;
+    if(!SDL_OpenAudioDevice || !SDL_PauseAudioDevice) { gAudioError = "SDL2 audio queue API unavailable"; return false; }
+    SDL_AudioSpec obtained{};
+    gAudioDevice = SDL_OpenAudioDevice(nullptr, 0, &wanted, &obtained, 0);
+    if(!gAudioDevice) { gAudioError = std::string("SDL_OpenAudioDevice failed: ") + sdl_error(); return false; }
+    // For SDL_QueueAudio the device format must match the buffers we queue.
+    if(obtained.freq != wanted.freq || obtained.format != wanted.format || obtained.channels != wanted.channels) {
+        SDL_CloseAudioDevice(gAudioDevice); gAudioDevice = 0;
+        gAudioError = "audio device format mismatch; use a standard PCM WAV (8/16-bit mono/stereo)";
+        return false;
+    }
+    gAudioSpec = obtained;
+    SDL_PauseAudioDevice(gAudioDevice, 0);
+    return true;
 }
 
 static bool init_graphics(int w,int h,const char* title){
@@ -467,7 +654,9 @@ static bool init_graphics(int w,int h,const char* title){
 }
 
 static void shutdown_graphics(){
-    if(!gGraphics)return; if(gGL&&SDL_GL_DeleteContext)SDL_GL_DeleteContext(gGL);gGL=nullptr;if(gWindow&&SDL_DestroyWindow)SDL_DestroyWindow(gWindow);gWindow=nullptr;gTextures.clear();gSounds.clear();if(gAudioDevice&&SDL_CloseAudioDevice){SDL_CloseAudioDevice(gAudioDevice);gAudioDevice=0;}if(SDL_Quit)SDL_Quit();gGraphics=false;
+    if(gMusic&&Mix_FreeMusic){Mix_FreeMusic(gMusic);gMusic=nullptr;} if(Mix_CloseAudio&&gMixerReady)Mix_CloseAudio(); gMixerReady=false; if(gAudioDevice&&SDL_CloseAudioDevice){SDL_CloseAudioDevice(gAudioDevice);gAudioDevice=0;} gAudio=false; gAudioError.clear();
+    for(auto&[id,f]:gFonts){if(TTF_CloseFont&&f)TTF_CloseFont(f);} gFonts.clear(); if(TTF_Quit&&gTTFReady)TTF_Quit(); gTTFReady=false;
+    if(!gGraphics)return; if(gGL&&SDL_GL_DeleteContext)SDL_GL_DeleteContext(gGL);gGL=nullptr;if(gWindow&&SDL_DestroyWindow)SDL_DestroyWindow(gWindow);gWindow=nullptr;gTextures.clear();gSounds.clear();gModels.clear();gParticles.clear();if(SDL_Quit)SDL_Quit();gGraphics=false;gEntities.clear();gCameraX=0;gCameraY=0;gCameraZoom=1;
 }
 
 } // namespace
@@ -526,10 +715,63 @@ void nexus_gfx_line(double x1,double y1,double x2,double y2,double width,double 
 void nexus_gfx_text(double x,double y,double scale,const char*t,double r,double g,double b,double a){if(!gGraphics)return;setup_2d();draw_text(float(x),float(y),float(scale),t,float(r),float(g),float(b),float(a));}
 void nexus_gfx_set_fps(int64_t fps){if(fps<=0)return;/* language-level limiter is preferable; keep backend deterministic */}
 
-int64_t nexus_gfx_texture_load(const char*path){if(!gGraphics||!path||!SDL_LoadBMP||!SDL_ConvertSurfaceFormat||!SDL_FreeSurface){gGraphicsError="BMP texture support is unavailable in this SDL2 runtime";return 0;}SDL_Surface*src=SDL_LoadBMP(path);if(!src)return 0;SDL_Surface*surf=SDL_ConvertSurfaceFormat(src,SDL_PIXELFORMAT_ABGR8888,0);SDL_FreeSurface(src);if(!surf)return 0;GLuint tex=0;glGenTextures(1,&tex);glBindTexture(GL_TEXTURE_2D,tex);glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_MIN_FILTER,GL_LINEAR);glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_MAG_FILTER,GL_LINEAR);glTexImage2D(GL_TEXTURE_2D,0,4,surf->w,surf->h,0,GL_RGBA,GL_UNSIGNED_BYTE,surf->pixels);glBindTexture(GL_TEXTURE_2D,0);int64_t id=gNextTexture++;gTextures[id]=Texture{tex,surf->w,surf->h};SDL_FreeSurface(surf);return id;}
+int64_t nexus_gfx_texture_load(const char*path){
+    if(!gGraphics||!path||!SDL_ConvertSurfaceFormat||!SDL_FreeSurface){gGraphicsError="graphics texture system is unavailable";return 0;}
+    SDL_Surface*src=nullptr;
+    if(IMG_Load) src=IMG_Load(path);
+    if(!src && SDL_LoadBMP) src=SDL_LoadBMP(path);
+    if(!src){gGraphicsError=IMG_GetError?std::string("image load failed: ")+IMG_GetError():"image load failed (need SDL2_image for PNG/JPG or BMP)";return 0;}
+    SDL_Surface*surf=SDL_ConvertSurfaceFormat(src,SDL_PIXELFORMAT_ABGR8888,0);SDL_FreeSurface(src);if(!surf)return 0;GLuint tex=0;glGenTextures(1,&tex);glBindTexture(GL_TEXTURE_2D,tex);glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_MIN_FILTER,GL_LINEAR);glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_MAG_FILTER,GL_LINEAR);glTexImage2D(GL_TEXTURE_2D,0,4,surf->w,surf->h,0,GL_RGBA,GL_UNSIGNED_BYTE,surf->pixels);glBindTexture(GL_TEXTURE_2D,0);int64_t id=gNextTexture++;gTextures[id]=Texture{tex,surf->w,surf->h};SDL_FreeSurface(surf);return id;}
 void nexus_gfx_texture_draw(int64_t id,double x,double y,double w,double h,double r,double g,double b,double a){auto it=gTextures.find(id);if(!gGraphics||it==gTextures.end())return;setup_2d();draw_textured_quad(it->second,float(x),float(y),float(w),float(h),float(r),float(g),float(b),float(a));}
 void nexus_gfx_texture_unload(int64_t id){auto it=gTextures.find(id);if(it==gTextures.end())return;if(gGraphics&&it->second.id)glDeleteTextures(1,&it->second.id);gTextures.erase(it);}
 int64_t nexus_gfx_texture_width(int64_t id){auto it=gTextures.find(id);return it==gTextures.end()?0:it->second.w;}int64_t nexus_gfx_texture_height(int64_t id){auto it=gTextures.find(id);return it==gTextures.end()?0:it->second.h;}
+
+void nexus_gfx_camera_set(double x,double y,double zoom){gCameraX=float(x);gCameraY=float(y);gCameraZoom=zoom>0.01?float(zoom):0.01f;}
+void nexus_gfx_camera_reset(){gCameraX=0;gCameraY=0;gCameraZoom=1;}
+void nexus_gfx_texture_draw_frame(int64_t id,double x,double y,double w,double h,int64_t frame,int64_t frameW,int64_t frameH,int64_t columns,double r,double g,double b,double a){
+    auto it=gTextures.find(id);if(!gGraphics||it==gTextures.end()||frameW<=0||frameH<=0||columns<=0)return;setup_2d();const Texture&t=it->second;int64_t col=frame%columns,row=frame/columns;float u0=float(col*frameW)/float(t.w),v0=float(row*frameH)/float(t.h),u1=float((col+1)*frameW)/float(t.w),v1=float((row+1)*frameH)/float(t.h);glEnable(GL_TEXTURE_2D);glBindTexture(GL_TEXTURE_2D,t.id);glColor4f(float(r),float(g),float(b),float(a));glBegin(GL_QUADS);glTexCoord2f(u0,v0);glVertex2f(float(x),float(y));glTexCoord2f(u1,v0);glVertex2f(float(x+w),float(y));glTexCoord2f(u1,v1);glVertex2f(float(x+w),float(y+h));glTexCoord2f(u0,v1);glVertex2f(float(x),float(y+h));glEnd();glBindTexture(GL_TEXTURE_2D,0);glDisable(GL_TEXTURE_2D);}
+const char* nexus_gfx_image_type(){return IMG_Load?"PNG/JPG/BMP (SDL2_image + SDL2 core)":"BMP only (install SDL2_image for PNG/JPG)";}
+int64_t nexus_gfx_font_load(const char*path,int64_t size){load_optional_media_libs();if(!gTTF||!TTF_Init||!TTF_OpenFont||!TTF_CloseFont||!TTF_RenderUTF8_Blended||size<=0){gGraphicsError="TTF font backend unavailable; install SDL2_ttf";return 0;}if(!gTTFReady&&TTF_Init()!=0){gGraphicsError=TTF_GetError?TTF_GetError():"TTF_Init failed";return 0;}gTTFReady=true;TTF_Font*f=TTF_OpenFont(path,int(size));if(!f){gGraphicsError=TTF_GetError?TTF_GetError():"font load failed";return 0;}int64_t id=gNextFont++;gFonts[id]=f;return id;}
+void nexus_gfx_text_font(int64_t id,double x,double y,const char*text,double r,double g,double b,double a){auto it=gFonts.find(id);if(!gGraphics||it==gFonts.end()||!TTF_RenderUTF8_Blended)return;SDL_Color c{uint8_t(std::clamp(r,0.0,1.0)*255.0),uint8_t(std::clamp(g,0.0,1.0)*255.0),uint8_t(std::clamp(b,0.0,1.0)*255.0),uint8_t(std::clamp(a,0.0,1.0)*255.0)};SDL_Surface*s=TTF_RenderUTF8_Blended(it->second,text?text:"",c);if(!s)return;SDL_Surface*surf=SDL_ConvertSurfaceFormat(s,SDL_PIXELFORMAT_ABGR8888,0);SDL_FreeSurface(s);if(!surf)return;GLuint tex=0;glGenTextures(1,&tex);glBindTexture(GL_TEXTURE_2D,tex);glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_MIN_FILTER,GL_LINEAR);glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_MAG_FILTER,GL_LINEAR);glTexImage2D(GL_TEXTURE_2D,0,4,surf->w,surf->h,0,GL_RGBA,GL_UNSIGNED_BYTE,surf->pixels);setup_2d();glEnable(GL_TEXTURE_2D);glBindTexture(GL_TEXTURE_2D,tex);glColor4f(1,1,1,1);glBegin(GL_QUADS);glTexCoord2f(0,0);glVertex2f(float(x),float(y));glTexCoord2f(1,0);glVertex2f(float(x+surf->w),float(y));glTexCoord2f(1,1);glVertex2f(float(x+surf->w),float(y+surf->h));glTexCoord2f(0,1);glVertex2f(float(x),float(y+surf->h));glEnd();glBindTexture(GL_TEXTURE_2D,0);glDisable(GL_TEXTURE_2D);glDeleteTextures(1,&tex);SDL_FreeSurface(surf);}
+void nexus_gfx_font_unload(int64_t id){auto it=gFonts.find(id);if(it!=gFonts.end()){if(TTF_CloseFont)TTF_CloseFont(it->second);gFonts.erase(it);}}
+int64_t nexus_gfx_sound_load(const char*path);
+void nexus_gfx_sound_play(int64_t id,bool loop);
+void nexus_gfx_sound_stop();
+void nexus_gfx_sound_volume(double v);
+int64_t nexus_gfx_music_load(const char*path){
+    load_optional_media_libs();
+    if(gMIX&&Mix_OpenAudio&&Mix_LoadMUS&&Mix_FreeMusic&&Mix_PlayMusic){
+        if(!gMixerReady&&Mix_OpenAudio(44100,AUDIO_S16LSB,2,2048)!=0){gGraphicsError=Mix_GetError?Mix_GetError():"Mix_OpenAudio failed";}
+        else {gMixerReady=true;Mix_Music*m=Mix_LoadMUS(path);if(m){if(gMusic&&Mix_FreeMusic)Mix_FreeMusic(gMusic);gMusic=m;return 1;}gGraphicsError=Mix_GetError?Mix_GetError():"music load failed";}
+    }
+    // Guaranteed fallback: plain PCM WAV using the core SDL2 audio queue.
+    return nexus_gfx_sound_load(path);
+}
+bool nexus_gfx_music_play(int64_t id,bool loop){
+    if(gMusic&&Mix_PlayMusic)return Mix_PlayMusic(gMusic,loop?-1:1)==0;
+    nexus_gfx_sound_play(id,loop);return gAudioDevice!=0;
+}
+void nexus_gfx_music_stop(){if(Mix_HaltMusic&&gMusic)Mix_HaltMusic();nexus_gfx_sound_stop();}
+void nexus_gfx_music_volume(double v){if(Mix_VolumeMusic&&gMusic)Mix_VolumeMusic(std::clamp(int(v*128.0),0,128));nexus_gfx_sound_volume(v);}
+void nexus_gfx_cursor_visible(bool visible){if(SDL_ShowCursor)SDL_ShowCursor(visible?1:0);}
+bool nexus_ui_button(double x,double y,double w,double h,const char*label){bool hover=false;if(gGraphics&&SDL_GetMouseState){int mx=0,my=0;SDL_GetMouseState(&mx,&my);hover=mx>=x&&mx<=x+w&&my>=y&&my<=y+h;}setup_2d();draw_quad(float(x),float(y),float(w),float(h),hover?0.12f:0.08f,hover?0.48f:0.32f,0.82f,1.0f);nexus_gfx_text(x+12,y+12,1.5,label,1,1,1,1);return hover&&gMouseClicked;}
+void nexus_ui_panel(double x,double y,double w,double h,double r,double g,double b,double a){nexus_gfx_rect(x,y,w,h,r,g,b,a);}
+void nexus_ui_label(double x,double y,const char*text,double scale){nexus_gfx_text(x,y,scale,text,1,1,1,1);}
+void nexus_ui_progress(double x,double y,double w,double h,double value,double r,double g,double b,double a){nexus_gfx_rect(x,y,w,h,0.12,0.14,0.18,1);double v=std::clamp(value,0.0,1.0);nexus_gfx_rect(x,y,w*v,h,r,g,b,a);}
+int64_t nexus_ecs_create(){int64_t id=gNextEntity++;gEntities[id]=EcsEntity{};return id;}
+void nexus_ecs_destroy(int64_t id){gEntities.erase(id);}
+bool nexus_ecs_alive(int64_t id){return gEntities.contains(id);}
+void nexus_ecs_set_position(int64_t id,double x,double y){auto it=gEntities.find(id);if(it!=gEntities.end()){it->second.x=float(x);it->second.y=float(y);}}
+void nexus_ecs_set_velocity(int64_t id,double x,double y){auto it=gEntities.find(id);if(it!=gEntities.end()){it->second.vx=float(x);it->second.vy=float(y);}}
+void nexus_ecs_set_size(int64_t id,double w,double h){auto it=gEntities.find(id);if(it!=gEntities.end()){it->second.w=float(w);it->second.h=float(h);}}
+void nexus_ecs_set_color(int64_t id,double r,double g,double b,double a){auto it=gEntities.find(id);if(it!=gEntities.end()){it->second.r=float(r);it->second.g=float(g);it->second.b=float(b);it->second.a=float(a);}}
+void nexus_ecs_set_texture(int64_t id,int64_t tex){auto it=gEntities.find(id);if(it!=gEntities.end())it->second.texture=tex;}
+void nexus_ecs_update(double dt){for(auto&[id,e]:gEntities){if(e.alive){e.x += e.vx*float(dt);e.y += e.vy*float(dt);}}}
+void nexus_ecs_draw(){if(!gGraphics)return;for(auto&[id,e]:gEntities){if(!e.alive)continue;if(e.texture)nexus_gfx_texture_draw(e.texture,e.x,e.y,e.w,e.h,e.r,e.g,e.b,e.a);else nexus_gfx_rect(e.x,e.y,e.w,e.h,e.r,e.g,e.b,e.a);}}
+bool nexus_ecs_collides(int64_t a,int64_t b){auto ia=gEntities.find(a),ib=gEntities.find(b);if(ia==gEntities.end()||ib==gEntities.end())return false;const auto&A=ia->second;const auto&B=ib->second;return A.x < B.x+B.w && A.x+A.w > B.x && A.y < B.y+B.h && A.y+A.h > B.y;}
+double nexus_ecs_x(int64_t id){auto it=gEntities.find(id);return it==gEntities.end()?0:it->second.x;}
+double nexus_ecs_y(int64_t id){auto it=gEntities.find(id);return it==gEntities.end()?0:it->second.y;}
+int64_t nexus_ecs_count(){return int64_t(gEntities.size());}
 
 // Simple OpenGL 2.1 compatible 3D backend.
 void nexus_gfx3d_begin(double fov,double nearPlane,double farPlane,double camX,double camY,double camZ,double pitch,double yaw,double roll){if(!gGraphics)return;glViewport(0,0,gWidth,gHeight);glEnable(GL_DEPTH_TEST);glMatrixMode(GL_PROJECTION);glLoadIdentity();double aspect=double(gWidth)/double(gHeight?gHeight:1);double top=nearPlane*std::tan(fov*3.14159265358979323846/360.0);double right=top*aspect;glFrustum(-right,right,-top,top,nearPlane,farPlane);glMatrixMode(GL_MODELVIEW);glLoadIdentity();glRotatef(float(-roll),0,0,1);glRotatef(float(-pitch),1,0,0);glRotatef(float(-yaw),0,1,0);glTranslatef(float(-camX),float(-camY),float(-camZ));}
@@ -538,10 +780,69 @@ void nexus_gfx3d_cube(double x,double y,double z,double sx,double sy,double sz,d
 void nexus_gfx3d_grid(int64_t cells,double spacing,double r,double g,double b,double a){if(!gGraphics)return;glColor4f(float(r),float(g),float(b),float(a));glLineWidth(1);glBegin(GL_LINES);for(int64_t i=-cells;i<=cells;i++){float p=float(i)*float(spacing);glVertex3f(p,0,float(-cells*spacing));glVertex3f(p,0,float(cells*spacing));glVertex3f(float(-cells*spacing),0,p);glVertex3f(float(cells*spacing),0,p);}glEnd();}
 void nexus_gfx3d_end(){if(!gWindow||!SDL_GL_SwapWindow)return;SDL_GL_SwapWindow(gWindow);}
 
-// WAV audio using SDL2 core audio queue.
-int64_t nexus_gfx_sound_load(const char*path){if(!load_sdl()||!path||!SDL_LoadWAV||!SDL_FreeWAV||!SDL_OpenAudioDevice||!SDL_CloseAudioDevice||!SDL_PauseAudioDevice||!SDL_QueueAudio){gGraphicsError="WAV audio support is unavailable in this SDL2 runtime";return 0;}if(SDL_Init(0x00000010u)!=0){gGraphicsError=std::string("SDL audio init failed: ")+sdl_error();return 0;}SDL_AudioSpec spec{};uint8_t*data=nullptr;uint32_t len=0;if(!SDL_LoadWAV(path,&spec,&data,&len)||!data||len==0)return 0;if(!gAudioDevice){SDL_AudioSpec want=spec;gAudioDevice=SDL_OpenAudioDevice(nullptr,0,&want,nullptr,0);if(!gAudioDevice){SDL_FreeWAV(data);return 0;}SDL_PauseAudioDevice(gAudioDevice,0);}Sound s; s.data.assign(data,data+len);s.freq=spec.freq;s.format=spec.format;s.channels=spec.channels;s.samples=spec.samples;SDL_FreeWAV(data);int64_t id=gNextSound++;gSounds[id]=std::move(s);return id;}
-void nexus_gfx_sound_play(int64_t id,bool loop){auto it=gSounds.find(id);if(it==gSounds.end()||!gAudioDevice)return;/* one-shot is exact; loop is implemented by queuing a bounded repeat */int repeats=loop?32:1;for(int i=0;i<repeats;i++)SDL_QueueAudio(gAudioDevice,it->second.data.data(),uint32_t(it->second.data.size()));}
-void nexus_gfx_sound_stop(){if(gAudioDevice){SDL_CloseAudioDevice(gAudioDevice);gAudioDevice=0;}}
+
+// Lightweight OBJ model loader for the fixed-function 3D backend.
+int64_t nexus_gfx3d_model_load(const char* path){
+    if(!path){gGraphicsError="OBJ path is null";return 0;}
+    std::ifstream f(path); if(!f){gGraphicsError=std::string("cannot open OBJ: ")+path;return 0;}
+    std::vector<std::array<float,3>> pos; Model3D model; std::string line;
+    while(std::getline(f,line)){
+        std::istringstream in(line); std::string tag; in>>tag;
+        if(tag=="v"){float x,y,z;if(in>>x>>y>>z)pos.push_back({x,y,z});}
+        else if(tag=="f"){
+            std::vector<int> ids; std::string tok;
+            while(in>>tok){auto slash=tok.find('/');std::string n=tok.substr(0,slash);try{int idx=std::stoi(n);if(idx<0)idx=int(pos.size())+idx+1;if(idx>0&&idx<=int(pos.size()))ids.push_back(idx-1);}catch(...){}}
+            if(ids.size()>=3){for(size_t i=1;i+1<ids.size();++i){for(int k:{ids[0],ids[i],ids[i+1]}){auto v=pos[size_t(k)];model.vertices.push_back(v[0]);model.vertices.push_back(v[1]);model.vertices.push_back(v[2]);}}}
+        }
+    }
+    if(model.vertices.empty()){gGraphicsError="OBJ contains no triangle faces";return 0;}
+    int64_t id=gNextModel++;gModels[id]=std::move(model);return id;
+}
+void nexus_gfx3d_model_draw(int64_t id,double x,double y,double z,double sx,double sy,double sz,double rx,double ry,double rz){
+    auto it=gModels.find(id);if(!gGraphics||it==gModels.end())return;
+    glPushMatrix();glTranslatef(float(x),float(y),float(z));glRotatef(float(rx),1,0,0);glRotatef(float(ry),0,1,0);glRotatef(float(rz),0,0,1);glScalef(float(sx),float(sy),float(sz));glColor4f(0.75f,0.85f,1.0f,1.0f);
+    glBegin(GL_TRIANGLES);for(size_t i=0;i+2<it->second.vertices.size();i+=3)glVertex3f(it->second.vertices[i],it->second.vertices[i+1],it->second.vertices[i+2]);glEnd();glPopMatrix();
+}
+void nexus_gfx3d_model_unload(int64_t id){gModels.erase(id);}
+
+int64_t nexus_gfx_particle_create(double x,double y,double vx,double vy,double life,double size,double r,double g,double b,double a){Particle p;p.x=float(x);p.y=float(y);p.vx=float(vx);p.vy=float(vy);p.life=float(std::max(life,0.001));p.maxLife=p.life;p.size=float(size);p.r=float(r);p.g=float(g);p.b=float(b);p.a=float(a);int64_t id=gNextParticle++;gParticles[id]=p;return id;}
+bool nexus_gfx_particle_alive(int64_t id){auto it=gParticles.find(id);return it!=gParticles.end()&&it->second.alive;}
+void nexus_gfx_particles_update(double dt){float d=float(std::max(dt,0.0));for(auto&[id,p]:gParticles){if(!p.alive)continue;p.x+=p.vx*d;p.y+=p.vy*d;p.life-=d;if(p.life<=0)p.alive=false;}}
+void nexus_gfx_particles_draw(){for(const auto&[id,p]:gParticles){if(!p.alive)continue;float fade=std::clamp(p.life/p.maxLife,0.0f,1.0f);draw_circle(p.x,p.y,p.size,p.r,p.g,p.b,p.a*fade);}}
+void nexus_gfx_particle_destroy(int64_t id){gParticles.erase(id);}
+void nexus_gfx_particles_clear(){gParticles.clear();}
+
+// WAV audio using SDL2 core audio queue. No SDL2_mixer or SDL_LoadWAV symbol is required.
+int64_t nexus_gfx_sound_load(const char*path){
+    gAudioError.clear();
+    if(!load_sdl()||!path||!SDL_OpenAudioDevice||!SDL_CloseAudioDevice||!SDL_PauseAudioDevice||!SDL_QueueAudio||!SDL_GetQueuedAudioSize){gAudioError="SDL2 core audio API unavailable";gGraphicsError=gAudioError;return 0;}
+    if(SDL_Init(0x00000010u)!=0){gAudioError=std::string("SDL audio init failed: ")+sdl_error();gGraphicsError=gAudioError;return 0;}
+    SDL_AudioSpec spec{};std::vector<uint8_t> data;std::string err;
+    if(!load_pcm_wav(path,spec,data,err)){gAudioError=err;gGraphicsError=err;return 0;}
+    if(!ensure_audio_device(spec)){gGraphicsError=gAudioError;return 0;}
+    Sound s; s.data=std::move(data);s.freq=spec.freq;s.format=spec.format;s.channels=spec.channels;s.samples=spec.samples;
+    int64_t id=gNextSound++;gSounds[id]=std::move(s);gAudio=true;return id;
+}
+void nexus_gfx_sound_play(int64_t id,bool loop){
+    auto it=gSounds.find(id);if(it==gSounds.end()){gAudioError="unknown sound id";return;}
+    if(!gAudioDevice){gAudioError="audio device is not open";return;}
+    const Sound&s=it->second;
+    std::vector<uint8_t> scaled=s.data;
+    if(gAudioVolume<128){
+        if(s.format==0x8010u){
+            for(size_t i=0;i+1<scaled.size();i+=2){int16_t sample=int16_t(uint16_t(scaled[i]) | (uint16_t(scaled[i+1])<<8));sample=int16_t(std::clamp(int(sample)*gAudioVolume/128,-32768,32767));scaled[i]=uint8_t(sample&0xff);scaled[i+1]=uint8_t((uint16_t(sample)>>8)&0xff);}
+        } else if(s.format==0x0008u){
+            for(auto&v:scaled){int sample=int(v)-128;sample=std::clamp(sample*gAudioVolume/128,-128,127);v=uint8_t(sample+128);}
+        }
+    }
+    if(!SDL_QueueAudio(gAudioDevice,scaled.data(),uint32_t(scaled.size()))){gAudioError="SDL_QueueAudio failed";gGraphicsError=gAudioError;return;}
+    if(loop){for(int i=0;i<63;i++) SDL_QueueAudio(gAudioDevice,scaled.data(),uint32_t(scaled.size()));}
+}
+void nexus_gfx_sound_stop(){if(gAudioDevice){if(SDL_ClearQueuedAudio)SDL_ClearQueuedAudio(gAudioDevice);SDL_CloseAudioDevice(gAudioDevice);gAudioDevice=0;}gAudio=false;}
 void nexus_gfx_sound_unload(int64_t id){gSounds.erase(id);}
+int64_t nexus_gfx_audio_available(){return (gAudioDevice!=0||load_sdl())?1:0;}
+const char* nexus_gfx_audio_error(){return gAudioError.empty()?"":gAudioError.c_str();}
+void nexus_gfx_sound_volume(double v){gAudioVolume=std::clamp(int(v*128.0),0,128);}
+bool nexus_gfx_sound_playing(){return gAudioDevice && SDL_GetQueuedAudioSize && SDL_GetQueuedAudioSize(gAudioDevice)>0;}
 
 } // extern C

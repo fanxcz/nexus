@@ -1,5 +1,28 @@
 # Changelog
 
+## [0.7.0] - 2026-09-27
+
+- Added reliable PCM WAV playback using the SDL2 core audio queue.
+- Removed the hard dependency on the `SDL_LoadWAV` exported symbol.
+- Added `gfx_audio_available`, `gfx_audio_error`, `gfx_sound_volume`, and `gfx_sound_playing`.
+- Added optional SDL2_mixer music with automatic WAV fallback.
+- Added lightweight OBJ model loading/drawing/unloading.
+- Added particle creation, lifetime, update and rendering APIs.
+- Added new audio, particles and OBJ examples/assets.
+- Added compiler semantic tests for the new runtime APIs.
+- Updated project version and generated project manifests to 0.7.0.
+
+## 0.6.0
+- Added native 2D camera transform and sprite-sheet frame rendering.
+- Added optional PNG/JPG loading through SDL2_image.
+- Added optional TrueType font rendering through SDL2_ttf.
+- Added optional music playback through SDL2_mixer.
+- Added cursor visibility, immediate-mode UI helpers and a lightweight ECS runtime.
+- Added AABB entity collision, velocity updates and textured ECS rendering.
+- Added `examples/ultimate_showcase.nx`.
+- Kept media backends dynamically loaded so the compiler remains independent of development headers.
+
+
 ## v0.5.1
 - Fixed graphics initialization so missing audio devices do not block SDL/OpenGL windows.
 - Fixed SDL2 loader to treat BMP/WAV symbols as optional instead of required.

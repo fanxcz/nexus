@@ -51,6 +51,14 @@ int main(){
             auto p=parse("fn main(){ let mut running = true; while running { running = false } let name = input(\"Name: \"); let n = input_i64(\"N: \"); let x = str_i64(n); let ok = file_write(\"/tmp/nexus-tests.txt\", x); print(ok) }");
             nexus::SemanticAnalyzer().analyze(p);
         }
+        {
+            auto p=parse("fn main(){ let s=gfx_sound_load(\"examples/assets/beep.wav\"); let a=gfx_audio_available(); let e=gfx_audio_error(); gfx_sound_volume(0.5); gfx_sound_playing(); gfx_sound_play(s,false); gfx_sound_stop(); gfx_sound_unload(s); }");
+            nexus::SemanticAnalyzer().analyze(p);
+        }
+        {
+            auto p=parse("fn main(){ let m=gfx3d_model_load(\"examples/assets/cube.obj\"); gfx3d_model_draw(m,0.0,0.0,0.0,1.0,1.0,1.0,0.0,0.0,0.0); gfx3d_model_unload(m); let p=gfx_particle_create(0.0,0.0,1.0,1.0,1.0,4.0,1.0,0.0,0.0,1.0); gfx_particle_alive(p); gfx_particles_update(0.016); gfx_particles_draw(); gfx_particle_destroy(p); }");
+            nexus::SemanticAnalyzer().analyze(p);
+        }
         std::cout<<"Nexus tests: PASS\n";
         return 0;
     } catch(const std::exception&e){

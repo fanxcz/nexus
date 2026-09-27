@@ -85,7 +85,7 @@ public:
     }
     std::string generate(const Program&p){
         for(auto&s:const_cast<Program&>(p).structs)structs[s.name]=&s;for(auto&e:const_cast<Program&>(p).enums)enums[e.name]=&e;for(auto&f:const_cast<Program&>(p).functions)functions[f.name]=&f;
-        emitModule("; Nexus LLVM IR v0.5.1");if(!options.targetTriple.empty())emitModule("target triple = \""+options.targetTriple+"\"");
+        emitModule("; Nexus LLVM IR v0.7.0");if(!options.targetTriple.empty())emitModule("target triple = \""+options.targetTriple+"\"");
         for(auto&s:p.structs){std::ostringstream t;t<<"%struct."<<s.name<<" = type { ";for(size_t i=0;i<s.fields.size();++i){if(i)t<<", ";t<<llvmType(s.fields[i].type);}t<<" }";emitModule(t.str());}
         emitModule("declare void @nexus_print_i64(i64)");emitModule("declare void @nexus_print_f64(double)");emitModule("declare void @nexus_print_bool(i1)");emitModule("declare void @nexus_print_str(ptr)");emitModule("declare ptr @nexus_str_concat(ptr, ptr)");emitModule("declare i1 @nexus_str_equal(ptr, ptr)");emitModule("declare void @nexus_bounds_check(i64, i64)");emitModule("declare ptr @nexus_input(ptr)");emitModule("declare i64 @nexus_input_i64(ptr)");emitModule("declare double @nexus_input_f64(ptr)");emitModule("declare ptr @nexus_str_i64(i64)");emitModule("declare ptr @nexus_str_f64(double)");emitModule("declare ptr @nexus_str_bool(i1)");emitModule("declare i64 @nexus_read_key()");emitModule("declare i1 @nexus_key_pressed()");emitModule("declare void @nexus_clear()");emitModule("declare void @nexus_sleep_ms(i64)");emitModule("declare i64 @nexus_random_i64(i64, i64)");emitModule("declare i64 @nexus_time_ms()");emitModule("declare i64 @nexus_system(ptr)");emitModule("declare ptr @nexus_file_read(ptr)");emitModule("declare i64 @nexus_file_write(ptr, ptr)");emitModule("declare i1 @nexus_file_exists(ptr)");emitModule("declare ptr @nexus_env(ptr)");emitModule("declare void @nexus_exit(i64)");emitModule("declare void @nexus_screen_begin()");emitModule("declare void @nexus_screen_end()");emitModule("declare void @nexus_screen_clear()");emitModule("declare void @nexus_screen_put(i64, i64, ptr)");emitModule("declare void @nexus_screen_present()");emitModule("declare void @nexus_screen_set_title(ptr)");emitModule("declare i64 @nexus_screen_width()");emitModule("declare i64 @nexus_screen_height()");emitModule("declare void @nexus_beep()");
         emitModule("declare i1 @nexus_gfx_init(i64, i64, ptr)");
@@ -128,6 +128,49 @@ public:
         emitModule("declare void @nexus_gfx_sound_play(i64,i1)");
         emitModule("declare void @nexus_gfx_sound_stop()");
         emitModule("declare void @nexus_gfx_sound_unload(i64)");
+        emitModule("declare i64 @nexus_gfx_audio_available()");
+        emitModule("declare ptr @nexus_gfx_audio_error()");
+        emitModule("declare void @nexus_gfx_sound_volume(double)");
+        emitModule("declare i1 @nexus_gfx_sound_playing()");
+        emitModule("declare i64 @nexus_gfx3d_model_load(ptr)");
+        emitModule("declare void @nexus_gfx3d_model_draw(i64,double,double,double,double,double,double,double,double,double)");
+        emitModule("declare void @nexus_gfx3d_model_unload(i64)");
+        emitModule("declare i64 @nexus_gfx_particle_create(double,double,double,double,double,double,double,double,double,double)");
+        emitModule("declare i1 @nexus_gfx_particle_alive(i64)");
+        emitModule("declare void @nexus_gfx_particles_update(double)");
+        emitModule("declare void @nexus_gfx_particles_draw()");
+        emitModule("declare void @nexus_gfx_particle_destroy(i64)");
+        emitModule("declare void @nexus_gfx_particles_clear()");
+        emitModule("declare void @nexus_gfx_camera_set(double,double,double)");
+        emitModule("declare void @nexus_gfx_camera_reset()");
+        emitModule("declare void @nexus_gfx_texture_draw_frame(i64,double,double,double,double,i64,i64,i64,i64,double,double,double,double)");
+        emitModule("declare ptr @nexus_gfx_image_type()");
+        emitModule("declare i64 @nexus_gfx_font_load(ptr,i64)");
+        emitModule("declare void @nexus_gfx_text_font(i64,double,double,ptr,double,double,double,double)");
+        emitModule("declare void @nexus_gfx_font_unload(i64)");
+        emitModule("declare i64 @nexus_gfx_music_load(ptr)");
+        emitModule("declare i1 @nexus_gfx_music_play(i64,i1)");
+        emitModule("declare void @nexus_gfx_music_stop()");
+        emitModule("declare void @nexus_gfx_music_volume(double)");
+        emitModule("declare void @nexus_gfx_cursor_visible(i1)");
+        emitModule("declare i1 @nexus_ui_button(double,double,double,double,ptr)");
+        emitModule("declare void @nexus_ui_panel(double,double,double,double,double,double,double,double)");
+        emitModule("declare void @nexus_ui_label(double,double,ptr,double)");
+        emitModule("declare void @nexus_ui_progress(double,double,double,double,double,double,double,double)");
+        emitModule("declare i64 @nexus_ecs_create()");
+        emitModule("declare void @nexus_ecs_destroy(i64)");
+        emitModule("declare i1 @nexus_ecs_alive(i64)");
+        emitModule("declare void @nexus_ecs_set_position(i64,double,double)");
+        emitModule("declare void @nexus_ecs_set_velocity(i64,double,double)");
+        emitModule("declare void @nexus_ecs_set_size(i64,double,double)");
+        emitModule("declare void @nexus_ecs_set_color(i64,double,double,double,double)");
+        emitModule("declare void @nexus_ecs_set_texture(i64,i64)");
+        emitModule("declare void @nexus_ecs_update(double)");
+        emitModule("declare void @nexus_ecs_draw()");
+        emitModule("declare i1 @nexus_ecs_collides(i64,i64)");
+        emitModule("declare double @nexus_ecs_x(i64)");
+        emitModule("declare double @nexus_ecs_y(i64)");
+        emitModule("declare i64 @nexus_ecs_count()");
         for(auto&f:const_cast<Program&>(p).functions){if(f.external){std::ostringstream s;s<<"declare "<<llvmType(f.ret)<<" @"<<f.name<<"(";for(size_t i=0;i<f.params.size();++i){if(i)s<<", ";s<<llvmType(f.params[i].type);}s<<")";emitModule(s.str());continue;}
             vars.clear();types.clear();reg=0;label=0;terminated=false;breakLabels.clear();continueLabels.clear();body.str("");body.clear();Type codegenRet=f.ret;if(f.name=="main"&&codegenRet.kind==TypeKind::Void)codegenRet=Type::i64();std::ostringstream sig;sig<<"define "<<llvmType(codegenRet)<<" @"<<f.name<<"(";for(size_t i=0;i<f.params.size();++i){if(i)sig<<", ";sig<<llvmType(f.params[i].type)<<" %arg"<<i;}sig<<") {";emit(sig.str());emit("entry:");for(size_t i=0;i<f.params.size();++i){auto ptr=next();vars[f.params[i].name]=ptr;types[f.params[i].name]=f.params[i].type;emit(ptr+" = alloca "+llvmType(f.params[i].type));emit("store "+llvmType(f.params[i].type)+" %arg"+std::to_string(i)+", ptr "+ptr);}for(auto&s:f.body->statements)stmt(s.get(),codegenRet);if(!terminated){if(codegenRet.kind==TypeKind::Void)emit("ret void");else if(f.name=="main")emit("ret "+llvmType(codegenRet)+" 0");else throw std::runtime_error("function may fall through without return: "+f.name);}emit("}");functionsIR<<body.str();}
         std::ostringstream result;result<<module.str();for(auto&g:globals)result<<g<<'\n';result<<functionsIR.str();return result.str();
