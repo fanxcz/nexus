@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(nexus VERSION 0.4.0 LANGUAGES CXX C)
+project(nexus VERSION 0.5.1 LANGUAGES CXX C)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -30,7 +30,7 @@ endif()
 include(GNUInstallDirs)
 target_compile_definitions(nexus PRIVATE NEXUS_INSTALL_RUNTIME_DIR="${CMAKE_INSTALL_FULL_DATADIR}/nexus/runtime")
 install(TARGETS nexus RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
-install(FILES runtime/runtime.c DESTINATION ${CMAKE_INSTALL_DATADIR}/nexus/runtime)
+install(FILES runtime/runtime.cpp DESTINATION ${CMAKE_INSTALL_DATADIR}/nexus/runtime)
 install(DIRECTORY std/ DESTINATION ${CMAKE_INSTALL_DATADIR}/nexus/std OPTIONAL)
 
 if (NEXUS_BUILD_TESTS)

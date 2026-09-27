@@ -36,3 +36,13 @@ cmake --install build --prefix ~/.local
 ```
 
 The runtime is installed next to the compiler's data files, so `nexus run` can work from another directory.
+
+## Native graphics runtime
+
+For running generated windowed NEXUS applications on Debian, install the SDL2 runtime and OpenGL runtime:
+
+```bash
+sudo apt install libsdl2-2.0-0 libgl1
+```
+
+The compiler does not require SDL2 development headers; generated binaries dynamically load SDL2 at runtime. Debian 13/trixie provides `libsdl2-2.0-0`.

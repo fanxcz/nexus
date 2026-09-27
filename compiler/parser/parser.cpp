@@ -75,7 +75,7 @@ Expr::Ptr Parser::parsePrimary(){
     }
     if(accept(TokenKind::LBracket)){auto a=std::make_unique<ArrayExpr>();if(cur().kind!=TokenKind::RBracket){for(;;){a->elements.push_back(parseExpr());if(!accept(TokenKind::Comma))break;}}expect(TokenKind::RBracket);return a;}
     if(accept(TokenKind::LParen)){auto e=parseExpr();expect(TokenKind::RParen);return e;}
-    throw std::runtime_error("expected expression");
+    throw std::runtime_error(std::string("expected expression at ")+std::to_string(cur().pos.line)+":"+std::to_string(cur().pos.column)+" (got "+tokenName(cur().kind)+")");
 }
 Expr::Ptr Parser::parsePostfix(Expr::Ptr e){for(;;){if(accept(TokenKind::LParen)){auto*v=dynamic_cast<VarExpr*>(e.get());if(!v)throw std::runtime_error("only named functions can be called in v0.3");std::vector<Expr::Ptr>a;if(cur().kind!=TokenKind::RParen){for(;;){a.push_back(parseExpr());if(!accept(TokenKind::Comma))break;}}expect(TokenKind::RParen);e=std::make_unique<CallExpr>(v->name,std::move(a));continue;} if(accept(TokenKind::Dot)){auto m=expectIdentifier();e=std::make_unique<MemberExpr>(std::move(e),m);continue;} if(accept(TokenKind::LBracket)){auto idx=parseExpr();expect(TokenKind::RBracket);e=std::make_unique<IndexExpr>(std::move(e),std::move(idx));continue;} break;}return e;}
 Expr::Ptr Parser::parseUnary(){if(accept(TokenKind::Minus))return std::make_unique<UnaryExpr>(TokenKind::Minus,parseUnary());if(accept(TokenKind::Bang))return std::make_unique<UnaryExpr>(TokenKind::Bang,parseUnary());if(accept(TokenKind::Ampersand))return std::make_unique<UnaryExpr>(TokenKind::Ampersand,parseUnary());if(accept(TokenKind::Star))return std::make_unique<UnaryExpr>(TokenKind::Star,parseUnary());return parsePostfix(parsePrimary());}
