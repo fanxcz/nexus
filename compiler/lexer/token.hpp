@@ -25,6 +25,7 @@ enum class TokenKind {
     KwExtern,
     KwUnsafe,
     KwAs,
+    KwMatch,
     KwTrue,
     KwFalse,
     KwPrint,
@@ -34,7 +35,7 @@ enum class TokenKind {
     Bang, AndAnd, OrOr,
     Ampersand,
     LParen, RParen, LBrace, RBrace, LBracket, RBracket,
-    Comma, Colon, Dot, Arrow, Semicolon,
+    Comma, Colon, ColonColon, Dot, Arrow, FatArrow, Semicolon,
 };
 
 struct SourcePos { std::size_t line=1, column=1, offset=0; };

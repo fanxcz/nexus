@@ -1,3 +1,19 @@
+## 0.3.1
+
+- Fixed chained `else if` parsing.
+- Added `examples/nexus_arena.nx`, a full language showcase combining structs, enums, match, arrays, pointers, floating point, functions, loops and LLVM native code generation.
+
+## v0.3.0 - 2026-09-27
+
+- Added fixed-size arrays and array literals.
+- Added safe runtime bounds checking for variable indices.
+- Added index assignment.
+- Added unit enums and enum variant expressions using `Enum::Variant`.
+- Added `match` with `=>` arms and wildcard `_`.
+- Added `else if` parsing.
+- Added regression tests and examples for the new syntax.
+- Kept Linux x86_64 as the validated native target; target abstraction remains cross-platform.
+
 # Changelog
 
 ## 0.2.1 — String Operations Fix

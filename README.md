@@ -2,6 +2,13 @@
 
 Nexus is a universal programming language built around a C++20 compiler and LLVM-compatible native code generation. The compiler is developed on Debian 13, while the language frontend and target model are designed to remain platform-independent.
 
+## v0.3.1 — Arena + Parser Hotfix
+
+Working now:
+
+- chained `else if` parsing
+- `examples/nexus_arena.nx`: a full native terminal arena simulation combining structs, enums, match, arrays, pointers, `f64`, functions, loops and LLVM code generation
+
 ## v0.2.1 — String Operations Fix
 
 Working now:
@@ -9,7 +16,7 @@ Working now:
 - string concatenation with `+`
 - string equality with `==` and `!=`
 
-## v0.2.0 — Global Update
+## v0.3.0 — Global Update
 
 Working now:
 
@@ -18,20 +25,22 @@ Working now:
 - AST + semantic/type checking
 - `i64`, `f64`, `bool`, `string`, pointers and user-defined structs
 - functions, recursion and external function declarations
-- `if` / `else`, `while`, `break`, `continue`
+- `if` / `else if` / `else`, `while`, `break`, `continue`
 - arithmetic, comparison and logical expressions
 - mutable variables and mutable struct fields
 - LLVM IR generation and native linking through Clang
 - source imports for local `.nx` modules
 - project scaffolding with `nexus new` / `nexus init`
 - `nexus.toml` project entry point
+- fixed-size arrays, indexed access and bounds checks
+- unit enums, `Enum::Variant` and `match` with wildcard `_`
 - target model and `nexus targets`
 - installable runtime discovery
 - CMake + tests + GitHub CI
 
 Experimental / in progress:
 
-- enums are parsed but not yet lowered to native code
+- enum payloads/generic enums are not yet implemented
 - package registry and dependency solving are planned
 - LSP, async runtime and full cross-platform native CI are planned
 
@@ -134,3 +143,33 @@ LLVM IR can be emitted for any configured target. Native linking only succeeds w
 ## Repository
 
 GitHub target: `https://github.com/fanxcz/nexus`
+
+## v0.3 language features
+
+```nx
+let mut values = [10, 20, 30]
+values[1] = 99
+print(values[1])
+```
+
+```nx
+enum Color { Red, Green, Blue }
+
+match color {
+    Color::Red => { print("red") }
+    Color::Green => { print("green") }
+    _ => { print("other") }
+}
+```
+
+Arrays use compile-time checking for constant indices and a runtime bounds check for dynamic indices.
+
+### Maximum v0.3 showcase
+
+```bash
+./build/nexus check examples/nexus_arena.nx
+./build/nexus build examples/nexus_arena.nx -o nexus-arena
+./nexus-arena
+```
+
+The Arena is deterministic and intentionally uses only features that are implemented in the current compiler.

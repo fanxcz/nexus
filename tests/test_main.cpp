@@ -27,12 +27,25 @@ int main(){
             nexus::SemanticAnalyzer().analyze(p);
         }
         {
+            auto p=parse("enum Color { Red, Green, Blue } fn main(){ let c = Color::Green; match c { Color::Red => { print(\"red\") } Color::Green => { print(\"green\") } _ => { print(\"other\") } } }");
+            nexus::SemanticAnalyzer().analyze(p);
+        }
+        {
+            auto p=parse("fn main(){ let mut a = [1, 2, 3]; a[1] = 99; let i: i64 = 2; print(a[i]) }");
+            nexus::SemanticAnalyzer().analyze(p);
+        }
+        {
             bool failed=false;
             try {
                 auto p=parse("fn main(){ let x = 1; x = 2 }");
                 nexus::SemanticAnalyzer().analyze(p);
             } catch(const std::exception&) { failed=true; }
             if(!failed) return 1;
+        }
+        {
+            bool failed=false;
+            try { auto p=parse("fn main(){ let a = [1, 2, 3]; print(a[3]) }"); nexus::SemanticAnalyzer().analyze(p); } catch(const std::exception&) { failed=true; }
+            if(!failed) return 2;
         }
         std::cout<<"Nexus tests: PASS\n";
         return 0;
